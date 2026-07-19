@@ -51,7 +51,14 @@ class RecoveryEnrollmentWorkflow(
                     )
                 } finally { encryptedVaultKey.fill(0) }
                 val committed = recovery.commitEnrollment(enrollmentId, generation)
-                return RecoveryEnrollmentResult(RecoveryKitCodec.encode(material.kit()), committed)
+                // The recovery kit text must be materialized for display; keep it in wipeable
+                // secret memory until this UI boundary.
+                val kitText = RecoveryKitCodec.encodeSecret(material.kit()).use { encoded ->
+                    val text = StringBuilder()
+                    encoded.copyChars { chars -> text.append(chars) }
+                    text.toString()
+                }
+                return RecoveryEnrollmentResult(kitText, committed)
             } finally {
                 credential.fill(0); publicKey.fill(0); encryptedPrivate.fill(0)
             }

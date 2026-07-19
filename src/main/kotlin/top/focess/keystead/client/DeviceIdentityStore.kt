@@ -28,6 +28,7 @@ import javax.crypto.spec.SecretKeySpec
 import javax.security.auth.DestroyFailedException
 import top.focess.keystead.crypto.CryptoException
 import top.focess.keystead.crypto.DefaultCryptoService
+import top.focess.keystead.crypto.DeviceKeyPair
 import top.focess.keystead.model.KeyId
 
 class LocalDeviceIdentity(
@@ -177,7 +178,7 @@ class DeviceIdentityStore(
         require(deviceId.isNotBlank()) { "Device id must not be blank" }
         crypto.generateDeviceKeyPair().use { device ->
             val publicKey = device.publicKey()
-            val privateKey = device.privateKey()
+            val privateKey = device.privateKeyCopy()
             val proof = generateProofKeyPair()
             return try {
                 identity(deviceId, device.keyAlgorithm(), publicKey, privateKey, proof)
@@ -209,7 +210,7 @@ class DeviceIdentityStore(
     private fun createNative(deviceId: String, storage: SecureStorage): LocalDeviceIdentity {
         crypto.generateDeviceKeyPair().use { device ->
             val publicKey = device.publicKey()
-            val privateKey = device.privateKey()
+            val privateKey = device.privateKeyCopy()
             val proof = generateProofKeyPair()
             return try {
                 val identity = identity(deviceId, device.keyAlgorithm(), publicKey, privateKey, proof)
@@ -324,7 +325,7 @@ class DeviceIdentityStore(
             var proof: ProofKeyMaterial? = null
             try {
                 publicKey = device.publicKey()
-                privateKey = device.privateKey()
+                privateKey = device.privateKeyCopy()
                 proof = generateProofKeyPair()
                 writeNew(
                     deviceId,
@@ -673,4 +674,11 @@ class DeviceIdentityStore(
 sealed interface DeviceIdentityMigrationResult {
     data object Migrated : DeviceIdentityMigrationResult
     data object AlreadyNative : DeviceIdentityMigrationResult
+}
+
+/** Copies the private key out of protected memory; the caller owns and must wipe the result. */
+private fun DeviceKeyPair.privateKeyCopy(): ByteArray {
+    var copy = ByteArray(0)
+    copyPrivateKey { bytes -> copy = bytes.clone() }
+    return copy
 }

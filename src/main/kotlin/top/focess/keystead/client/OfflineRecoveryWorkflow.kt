@@ -5,15 +5,20 @@ import java.nio.file.Path
 import java.util.Base64
 import java.util.Comparator
 import java.util.UUID
+import top.focess.keystead.memory.SecretBuffer
 import top.focess.keystead.model.KeyId
 import top.focess.keystead.model.VaultId
 import top.focess.keystead.recovery.DefaultRecoveryCryptoService
 import top.focess.keystead.recovery.RecoveryCryptoService
+import top.focess.keystead.recovery.RecoveryKit
 import top.focess.keystead.recovery.RecoveryKitCodec
 import top.focess.keystead.recovery.RecoveryVaultKeyPackage
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.DeviceVaultKeyPackage
 import top.focess.keystead.store.FileVaultStore
+
+/** Mirrors the canonical recovery-kit size cap enforced by core's codec. */
+private const val MAX_ENCODED_KIT_CHARACTERS = 512
 
 class OfflineRecoveryWorkflow(
     client: KeysteadServerClient,
@@ -28,8 +33,29 @@ class OfflineRecoveryWorkflow(
         identity: LocalDeviceIdentity,
         vaultRoot: Path,
     ): ServerRecoveryCompletion {
-        RecoveryKitCodec.decode(encodedKit).use { kit ->
-            val (challengeId) = recovery.createChallenge(username, kit.enrollmentId(), kit.generation())
+        require(encodedKit.isNotEmpty() && encodedKit.length <= MAX_ENCODED_KIT_CHARACTERS) {
+            "Recovery kit is invalid"
+        }
+        val kitChars = encodedKit.toCharArray()
+        try {
+            SecretBuffer.fromChars(kitChars).use { encoded ->
+                RecoveryKitCodec.decode(encoded).use { kit ->
+                    return recoverWithKit(username, kit, newPassword, identity, vaultRoot)
+                }
+            }
+        } finally {
+            kitChars.fill('\u0000')
+        }
+    }
+
+    private fun recoverWithKit(
+        username: String,
+        kit: RecoveryKit,
+        newPassword: CharArray,
+        identity: LocalDeviceIdentity,
+        vaultRoot: Path,
+    ): ServerRecoveryCompletion {
+        val (challengeId) = recovery.createChallenge(username, kit.enrollmentId(), kit.generation())
             val credential = crypto.accountCredential(kit)
             val credentialText = Base64.getUrlEncoder().withoutPadding().encodeToString(credential)
             credential.fill(0)
@@ -73,7 +99,6 @@ class OfflineRecoveryWorkflow(
                 devicePublicKey.fill(0)
                 deleteTree(transientRoot)
             }
-        }
     }
 
     private fun provisionRecoveredVaults(

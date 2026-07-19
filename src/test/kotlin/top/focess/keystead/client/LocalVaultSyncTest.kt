@@ -15,6 +15,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import top.focess.keystead.crypto.DefaultCryptoService
+import top.focess.keystead.crypto.DeviceKeyPair
 import top.focess.keystead.model.SecretType
 
 class LocalVaultSyncTest {
@@ -723,7 +724,7 @@ class LocalVaultSyncTest {
                         targetDirectory,
                         vaultId,
                         deviceId = "phone-1",
-                        devicePrivateKey = device.privateKey(),
+                        devicePrivateKey = privateKeyCopyOf(device),
                         client = KeysteadServerClient(baseUrl, "alice", "server-password"),
                     )
                     .use { target ->
@@ -977,4 +978,11 @@ class LocalVaultSyncTest {
           "nextSinceRevision": ${nextSinceRevision?.toString() ?: "null"}
         }
         """.trimIndent()
+}
+
+/** Copies the private key out of protected memory; the caller owns and must wipe the result. */
+private fun privateKeyCopyOf(device: DeviceKeyPair): ByteArray {
+    var copy = ByteArray(0)
+    device.copyPrivateKey { bytes -> copy = bytes.clone() }
+    return copy
 }
