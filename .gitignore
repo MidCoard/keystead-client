@@ -1,0 +1,12 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+
+docs/superpowers/
+
+.env
+*.log
+.codegraph/
+.kotlin/
