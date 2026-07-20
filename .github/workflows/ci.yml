@@ -15,7 +15,6 @@ jobs:
         with:
           repository: MidCoard/keystead
           path: keystead
-          token: ${{ secrets.CORE_REPO_PAT }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
