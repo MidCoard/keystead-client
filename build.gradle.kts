@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "top.focess"
-version = "0.1.0-SNAPSHOT"
+version = "0.2.0-SNAPSHOT"
 
 kotlin {
     jvmToolchain(25)
@@ -37,6 +37,11 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Keystead"
             packageVersion = "1.0.0"
+            // keystead-core's fail-closed native locked memory requires native access
+            // to be granted to the unnamed module. Without this the packaged launcher
+            // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first
+            // secret operation, exactly as the test JVM did before tasks.test set it.
+            jvmArgs += "--enable-native-access=ALL-UNNAMED"
         }
     }
 }

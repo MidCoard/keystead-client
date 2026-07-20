@@ -1,0 +1,28 @@
+name: Keystead client CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: keystead-client
+      - uses: actions/checkout@v4
+        with:
+          repository: MidCoard/keystead
+          path: keystead
+          token: ${{ secrets.CORE_REPO_PAT }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew test --no-daemon --rerun-tasks
+        working-directory: keystead-client
+      - run: git diff --check
+        working-directory: keystead-client
