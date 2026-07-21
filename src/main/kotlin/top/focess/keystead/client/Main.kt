@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -108,6 +109,9 @@ fun KeysteadClientApp() {
     val revealLifecycle = remember { RevealLifecycle() }
     val clipboardLifecycle = remember { ClipboardLifecycle(AwtClipboardPort()) }
     var clipboardTicket by remember { mutableStateOf<ClipboardClearTicket?>(null) }
+    var showTotpCode by remember { mutableStateOf(false) }
+    var totpCode by remember { mutableStateOf("") }
+    var totpSecondsRemaining by remember { mutableStateOf(0) }
     var secretType by remember { mutableStateOf(SecretType.LOGIN_PASSWORD) }
     var title by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -239,6 +243,30 @@ fun KeysteadClientApp() {
         }
     }
     DisposableEffect(Unit) { onDispose { clipboardLifecycle.dispose(java.time.Instant.now(), clipboardTicket) } }
+    LaunchedEffect(selectedSecretId, showTotpCode, session) {
+        if (!showTotpCode) {
+            totpCode = ""
+            totpSecondsRemaining = 0
+            return@LaunchedEffect
+        }
+        val current = session ?: return@LaunchedEffect
+        val selected = secrets.firstOrNull { it.id == selectedSecretId } ?: return@LaunchedEffect
+        if (SecretType.valueOf(selected.type) != SecretType.MFA_SECRET) return@LaunchedEffect
+        val uri = runCatching { current.revealField(selected.id, "otpauthUri") }.getOrNull()
+        val period = MfaTotp.period(uri)
+        var lastCounter = -1L
+        while (true) {
+            val now = java.time.Instant.now()
+            val counter = now.epochSecond / period
+            if (counter != lastCounter) {
+                lastCounter = counter
+                val seed = runCatching { current.revealField(selected.id, "seed") }.getOrNull()
+                totpCode = seed?.let { MfaTotp.currentCode(it, uri, now) }.orEmpty()
+            }
+            totpSecondsRemaining = MfaTotp.secondsRemaining(period, now)
+            delay(1_000)
+        }
+    }
 
     fun refresh(current: LocalVaultSession) {
         secrets = current.listSecrets()
@@ -1022,9 +1050,11 @@ fun KeysteadClientApp() {
                 if (it != selectedSecretId) {
                     clearSecretEditor()
                     revealLifecycle.clear()
+                    showTotpCode = false
                 }
                 selectedSecretId = it
                 revealedValue = ""
+                totpCode = ""
             },
             modifier = modifier,
         )
@@ -1033,6 +1063,9 @@ fun KeysteadClientApp() {
         InspectorPanel(
             selectedSecret = selectedSecret,
             revealedValue = revealedValue,
+            showTotpCode = showTotpCode,
+            totpCode = totpCode,
+            totpSecondsRemaining = totpSecondsRemaining,
             onReveal = {
                 val current = session ?: return@InspectorPanel
                 val selected = selectedSecret ?: return@InspectorPanel
@@ -1054,6 +1087,10 @@ fun KeysteadClientApp() {
             },
             onCopy = {
                 revealedValue.takeIf { it.isNotEmpty() }?.let { clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now()) }
+            },
+            onToggleTotpCode = { showTotpCode = !showTotpCode },
+            onCopyTotpCode = {
+                totpCode.takeIf { it.isNotEmpty() }?.let { clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now()) }
             },
             onDelete = {
                 val current = session ?: return@InspectorPanel
@@ -2105,8 +2142,13 @@ private fun SecretTypeFilterSelector(selectedType: String?, onTypeChange: (Strin
 private fun InspectorPanel(
     selectedSecret: SecretListItem?,
     revealedValue: String,
+    showTotpCode: Boolean,
+    totpCode: String,
+    totpSecondsRemaining: Int,
     onReveal: () -> Unit,
     onCopy: () -> Unit,
+    onToggleTotpCode: () -> Unit,
+    onCopyTotpCode: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     modifier: Modifier,
@@ -2141,6 +2183,35 @@ private fun InspectorPanel(
                     .joinToString(" / "),
                 color = Muted,
             )
+        }
+        if (type == SecretType.MFA_SECRET) {
+            SectionTitle("Current code")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    if (showTotpCode) totpCode.ifEmpty { "…" } else "••••••",
+                    style = MaterialTheme.typography.h5,
+                    fontFamily = FontFamily.Monospace,
+                    color = Ink,
+                )
+                Text(
+                    "${totpSecondsRemaining}s",
+                    color = if (showTotpCode && totpSecondsRemaining <= 5) Amber else Muted,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onToggleTotpCode, modifier = Modifier.weight(1f)) {
+                    Text(if (showTotpCode) "Hide code" else "Show code")
+                }
+                OutlinedButton(
+                    onClick = onCopyTotpCode,
+                    enabled = showTotpCode && totpCode.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Copy code") }
+            }
         }
         OutlinedTextField(
             value = revealedValue,
