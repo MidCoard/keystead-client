@@ -286,6 +286,181 @@ class ServerAuthenticationTest {
             assertFailsWith<IllegalStateException> { session.client() }
         }
 
+    @Test
+    fun loginPersistsInitialRefreshTokenViaSink() =
+        withServer(
+            responseFor = { request ->
+                when (request.path) {
+                    "/api/v1/auth/login" -> tokenResponse("at-1", "rt-login", "2026-07-13T00:00:00Z")
+                    else -> error("Unexpected request: ${request.method} ${request.path}")
+                }
+            },
+        ) { baseUrl, _ ->
+            val persisted = mutableListOf<Pair<String, Instant>>()
+
+            KeysteadServerAuthClient(baseUrl, clock = clock)
+                .login(
+                    "alice",
+                    "server-password".toCharArray(),
+                    tokenSink = { token, expiresAt -> persisted.add(token to expiresAt) },
+                )
+
+            assertEquals(
+                listOf("rt-login" to Instant.parse("2026-08-11T00:00:00Z")),
+                persisted,
+            )
+        }
+
+    @Test
+    fun refreshPersistsRotatedRefreshToken() =
+        withServer(
+            responseFor = { request ->
+                when (request.path) {
+                    "/api/v1/auth/login" -> tokenResponse("at-1", "rt-login", "2026-07-13T00:00:00Z")
+                    "/api/v1/auth/refresh" -> tokenResponse("at-2", "rt-rotated", "2026-07-13T00:00:00Z")
+                    else -> error("Unexpected request: ${request.method} ${request.path}")
+                }
+            },
+        ) { baseUrl, _ ->
+            val persisted = mutableListOf<Pair<String, Instant>>()
+            val session =
+                KeysteadServerAuthClient(baseUrl, clock = clock)
+                    .login(
+                        "alice",
+                        "server-password".toCharArray(),
+                        tokenSink = { token, expiresAt -> persisted.add(token to expiresAt) },
+                    )
+
+            session.refresh()
+
+            assertEquals(listOf("rt-login", "rt-rotated"), persisted.map { it.first })
+        }
+
+    @Test
+    fun restoreWithExpiredRefreshTokenClearsStoreAndThrows() =
+        withServer(
+            responseFor = { request -> error("Unexpected request: ${request.method} ${request.path}") },
+        ) { baseUrl, requests ->
+            val revoked = mutableListOf<Unit>()
+
+            val error =
+                assertFailsWith<KeysteadAuthenticationException> {
+                    KeysteadServerAuthClient(baseUrl, clock = clock).restore(
+                        refreshToken = "rt-dead",
+                        refreshTokenExpiresAt = Instant.parse("2026-07-01T00:00:00Z"),
+                        onRevoked = { revoked.add(Unit) },
+                    )
+                }
+
+            assertEquals(401, error.statusCode)
+            assertEquals(1, revoked.size)
+            assertTrue(requests.isEmpty())
+        }
+
+    @Test
+    fun serverRejectedRefreshClearsStoreAndThrows() =
+        withServer(
+            responseFor = { request ->
+                when (request.path) {
+                    "/api/v1/auth/login" -> tokenResponse("at-1", "rt-login", "2026-07-13T00:00:00Z")
+                    "/api/v1/auth/refresh" -> TestResponse(401, "refresh-rejected")
+                    else -> error("Unexpected request: ${request.method} ${request.path}")
+                }
+            },
+        ) { baseUrl, _ ->
+            val revoked = mutableListOf<Unit>()
+            val session =
+                KeysteadServerAuthClient(baseUrl, clock = clock)
+                    .login(
+                        "alice",
+                        "server-password".toCharArray(),
+                        onRevoked = { revoked.add(Unit) },
+                    )
+
+            assertFailsWith<KeysteadAuthenticationException> { session.refresh() }
+
+            assertEquals(1, revoked.size)
+            assertFailsWith<IllegalStateException> { session.client() }
+        }
+
+    @Test
+    fun revokeClearsPersistedStore() =
+        withServer(
+            responseFor = { request ->
+                when (request.path) {
+                    "/api/v1/auth/login" -> tokenResponse("at-1", "rt-login", "2026-07-13T00:00:00Z")
+                    "/api/v1/auth/revoke" -> TestResponse(204)
+                    else -> error("Unexpected request: ${request.method} ${request.path}")
+                }
+            },
+        ) { baseUrl, _ ->
+            val revoked = mutableListOf<Unit>()
+            val session =
+                KeysteadServerAuthClient(baseUrl, clock = clock)
+                    .login(
+                        "alice",
+                        "server-password".toCharArray(),
+                        onRevoked = { revoked.add(Unit) },
+                    )
+
+            session.revoke()
+
+            assertEquals(1, revoked.size)
+            assertFailsWith<IllegalStateException> { session.client() }
+        }
+
+    @Test
+    fun logoutAllClearsPersistedStore() =
+        withServer(
+            responseFor = { request ->
+                when (request.path) {
+                    "/api/v1/auth/login" -> tokenResponse("at-1", "rt-login", "2026-07-13T00:00:00Z")
+                    "/api/v1/auth/logout-all" -> TestResponse(204)
+                    else -> error("Unexpected request: ${request.method} ${request.path}")
+                }
+            },
+        ) { baseUrl, _ ->
+            val revoked = mutableListOf<Unit>()
+            val session =
+                KeysteadServerAuthClient(baseUrl, clock = clock)
+                    .login(
+                        "alice",
+                        "server-password".toCharArray(),
+                        onRevoked = { revoked.add(Unit) },
+                    )
+
+            session.logoutAll()
+
+            assertEquals(1, revoked.size)
+            assertFailsWith<IllegalStateException> { session.client() }
+        }
+
+    @Test
+    fun restoreMintsFreshTokensAndPersistsRotatedRefreshToken() =
+        withServer(
+            responseFor = { request ->
+                when (request.path) {
+                    "/api/v1/auth/refresh" -> tokenResponse("at-fresh", "rt-rotated", "2026-07-13T00:00:00Z")
+                    else -> error("Unexpected request: ${request.method} ${request.path}")
+                }
+            },
+        ) { baseUrl, requests ->
+            val persisted = mutableListOf<Pair<String, Instant>>()
+
+            val session =
+                KeysteadServerAuthClient(baseUrl, clock = clock).restore(
+                    refreshToken = "rt-persisted",
+                    refreshTokenExpiresAt = Instant.parse("2026-08-11T00:00:00Z"),
+                    tokenSink = { token, expiresAt -> persisted.add(token to expiresAt) },
+                )
+
+            assertEquals(listOf("rt-rotated"), persisted.map { it.first })
+            assertEquals(1, requests.size)
+            assertEquals("/api/v1/auth/refresh", requests.single().path)
+            assertTrue(requests.single().body.contains("\"refreshToken\":\"rt-persisted\""))
+            assertEquals(Instant.parse("2026-08-11T00:00:00Z"), session.refreshTokenExpiresAt)
+        }
+
     private fun tokenResponse(accessToken: String, refreshToken: String, accessExpiresAt: String): TestResponse =
         TestResponse(
             200,

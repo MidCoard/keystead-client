@@ -166,6 +166,53 @@ fun KeysteadClientApp() {
     DisposableEffect(secureStorageViewModel) {
         onDispose { secureStorageViewModel.close() }
     }
+    fun serverSessionStore(): RefreshTokenStore? {
+        val storage = secureStorageViewModel.selectedStorage() ?: return null
+        if (storage.capability == SecureStorageCapability.MEMORY_ONLY) return null
+        return RefreshTokenStore(storage)
+    }
+
+    fun restoreServerSession() {
+        val store = serverSessionStore() ?: return
+        val persisted = store.load() ?: return
+        val tokenSink: (String, java.time.Instant) -> Unit = { refreshToken, expiresAt ->
+            store.save(
+                PersistedAuthSession(
+                    persisted.baseUrl,
+                    persisted.username,
+                    persisted.deviceId,
+                    refreshToken,
+                    expiresAt,
+                ),
+            )
+        }
+        val onRevoked: () -> Unit = { store.clear() }
+        // Bounded connect timeout so an unreachable server cannot freeze startup; a slow read
+        // still propagates as an exception and is caught below (store preserved for the next launch).
+        val restoreHttp =
+            java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(10))
+                .build()
+        try {
+            val session =
+                KeysteadServerAuthClient(persisted.baseUrl, restoreHttp).restore(
+                    persisted.refreshToken,
+                    persisted.refreshTokenExpiresAt,
+                    tokenSink,
+                    onRevoked,
+                )
+            serverAuthSession = session
+            serverUrl = persisted.baseUrl
+            serverUsername = persisted.username
+            status = "Signed in to Keystead Server (restored)"
+        } catch (error: KeysteadAuthenticationException) {
+            store.clear()
+            status = "Server session expired; sign in again"
+        } catch (error: Exception) {
+            status = "Could not restore server session: ${error.message ?: error::class.simpleName}"
+        }
+    }
+
     LaunchedEffect(Unit) {
         val persisted = secureStorageSettings.load()
         secureStorageModel =
@@ -176,6 +223,7 @@ fun KeysteadClientApp() {
             secureStorageViewModel.selectNative()
             secureStorageModel = secureStorageViewModel.model
         }
+        restoreServerSession()
     }
     LaunchedEffect(revealGeneration, selectedSecretId) {
         if (revealedValue.isNotEmpty()) {
@@ -229,9 +277,25 @@ fun KeysteadClientApp() {
         val passwordChars = serverPassword.toCharArray()
         try {
             runAction {
+                val store = serverSessionStore()
+                val tokenSink: ((String, java.time.Instant) -> Unit)? =
+                    store?.let { s ->
+                        { refreshToken, expiresAt ->
+                            s.save(
+                                PersistedAuthSession(
+                                    serverUrl,
+                                    serverUsername,
+                                    deviceId,
+                                    refreshToken,
+                                    expiresAt,
+                                ),
+                            )
+                        }
+                    }
+                val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
                 val authenticated =
                     KeysteadServerAuthClient(serverUrl)
-                        .login(serverUsername, passwordChars, deviceId)
+                        .login(serverUsername, passwordChars, deviceId, tokenSink, onRevoked)
                 serverAuthSession?.close()
                 serverAuthSession = authenticated
                 status =
@@ -579,7 +643,24 @@ fun KeysteadClientApp() {
                     runAction {
                         val authClient = KeysteadServerAuthClient(serverUrl)
                         authClient.registerUser(serverUsername, registrationPassword)
-                        val authenticated = authClient.login(serverUsername, loginPassword)
+                        val store = serverSessionStore()
+                        val tokenSink: ((String, java.time.Instant) -> Unit)? =
+                            store?.let { s ->
+                                { refreshToken, expiresAt ->
+                                    s.save(
+                                        PersistedAuthSession(
+                                            serverUrl,
+                                            serverUsername,
+                                            null,
+                                            refreshToken,
+                                            expiresAt,
+                                        ),
+                                    )
+                                }
+                            }
+                        val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
+                        val authenticated =
+                            authClient.login(serverUsername, loginPassword, null, tokenSink, onRevoked)
                         serverAuthSession?.close()
                         serverAuthSession = authenticated
                         serverDeviceState = null

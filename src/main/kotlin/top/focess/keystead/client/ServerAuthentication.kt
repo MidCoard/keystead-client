@@ -38,12 +38,16 @@ class KeysteadServerAuthClient(
         username: String,
         password: CharArray,
         deviceId: String? = null,
+        tokenSink: ((refreshToken: String, refreshTokenExpiresAt: Instant) -> Unit)? = null,
+        onRevoked: (() -> Unit)? = null,
     ): ServerAuthSession {
         val passwordCopy = password.copyOf()
         try {
             val body = credentialsBody(username, passwordCopy, deviceId)
             val tokens = sendForTokens("login", body)
-            return ServerAuthSession(root, http, clock, tokens)
+            val session = ServerAuthSession(root, http, clock, tokens, tokenSink, onRevoked)
+            session.persist(tokens)
+            return session
         } finally {
             passwordCopy.fill('\u0000')
             password.fill('\u0000')
@@ -59,6 +63,33 @@ class KeysteadServerAuthClient(
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
         requireAuthSuccess(response.statusCode())
         return response.body().toServerAuthTokens()
+    }
+
+    /**
+     * Rebuilds an authenticated session from a persisted refresh token by immediately
+     * refreshing it. The server rotates the refresh token on every refresh, so the returned
+     * session holds fresh tokens and the persisted token is updated via [tokenSink].
+     *
+     * Throws [KeysteadAuthenticationException] if the refresh token is expired or rejected
+     * (the store is cleared via [onRevoked] first); propagates network errors without
+     * clearing the store so the next launch can retry.
+     */
+    fun restore(
+        refreshToken: String,
+        refreshTokenExpiresAt: Instant,
+        tokenSink: ((refreshToken: String, refreshTokenExpiresAt: Instant) -> Unit)? = null,
+        onRevoked: (() -> Unit)? = null,
+    ): ServerAuthSession {
+        val seed =
+            ServerAuthTokens(
+                accessToken = "",
+                refreshToken = refreshToken,
+                accessTokenExpiresAt = Instant.EPOCH,
+                refreshTokenExpiresAt = refreshTokenExpiresAt,
+            )
+        val session = ServerAuthSession(root, http, clock, seed, tokenSink, onRevoked)
+        session.refresh()
+        return session
     }
 }
 
@@ -86,6 +117,8 @@ class ServerAuthSession internal constructor(
     private val http: HttpClient,
     private val clock: Clock,
     tokens: ServerAuthTokens,
+    private val tokenSink: ((refreshToken: String, refreshTokenExpiresAt: Instant) -> Unit)? = null,
+    private val onRevoked: (() -> Unit)? = null,
 ) : ServerAuthorization,
     AutoCloseable {
     private var tokens: ServerAuthTokens? = tokens
@@ -106,10 +139,20 @@ class ServerAuthSession internal constructor(
     fun refresh() {
         val current = currentTokens()
         if (!clock.instant().isBefore(current.refreshTokenExpiresAt)) {
+            onRevoked?.invoke()
             close()
             throw KeysteadAuthenticationException(401)
         }
-        tokens = sendForTokens("refresh", refreshTokenBody(current.refreshToken))
+        val updated =
+            try {
+                sendForTokens("refresh", refreshTokenBody(current.refreshToken))
+            } catch (error: KeysteadAuthenticationException) {
+                onRevoked?.invoke()
+                close()
+                throw error
+            }
+        tokens = updated
+        persist(updated)
     }
 
     @Synchronized
@@ -118,6 +161,7 @@ class ServerAuthSession internal constructor(
         try {
             sendExpectingSuccess("revoke", refreshTokenBody(current.refreshToken))
         } finally {
+            onRevoked?.invoke()
             close()
         }
     }
@@ -133,6 +177,7 @@ class ServerAuthSession internal constructor(
             val response = http.send(request, HttpResponse.BodyHandlers.discarding())
             requireAuthSuccess(response.statusCode())
         } finally {
+            onRevoked?.invoke()
             close()
         }
     }
@@ -150,6 +195,19 @@ class ServerAuthSession internal constructor(
     @Synchronized
     override fun close() {
         tokens = null
+    }
+
+    /**
+     * Best-effort persistence of the supplied tokens' refresh token. A storage failure is
+     * swallowed so it can never invalidate an otherwise-valid in-memory session; the
+     * rotated refresh token simply will not survive the next launch.
+     */
+    internal fun persist(tokens: ServerAuthTokens) {
+        val sink = tokenSink ?: return
+        try {
+            sink.invoke(tokens.refreshToken, tokens.refreshTokenExpiresAt)
+        } catch (_: RuntimeException) {
+        }
     }
 
     override fun toString(): String = "ServerAuthSession(<redacted>)"
