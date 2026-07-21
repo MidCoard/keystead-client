@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.Card
 import androidx.compose.material.Divider
@@ -28,6 +29,7 @@ import androidx.compose.material.OutlinedButton
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
+import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -112,6 +114,7 @@ fun KeysteadClientApp() {
     var showTotpCode by remember { mutableStateOf(false) }
     var totpCode by remember { mutableStateOf("") }
     var totpSecondsRemaining by remember { mutableStateOf(0) }
+    val destructiveGate = remember { ConfirmationGate<DestructiveConfirmation>() }
     var secretType by remember { mutableStateOf(SecretType.LOGIN_PASSWORD) }
     var title by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -294,6 +297,43 @@ fun KeysteadClientApp() {
             status = error.message ?: "Server authentication failed"
         } catch (error: RuntimeException) {
             status = error.message ?: error::class.simpleName.orEmpty()
+        }
+    }
+
+    fun performDeleteSecret(secretId: String) {
+        val current = session ?: return
+        runAction {
+            current.delete(secretId)
+            if (selectedSecretId == secretId) {
+                selectedSecretId = null
+                revealLifecycle.clear()
+                revealedValue = ""
+                showTotpCode = false
+                totpCode = ""
+            }
+            if (editingSecretId == secretId) {
+                clearSecretEditor()
+            }
+            status = "Deleted secret"
+            refresh(current)
+        }
+    }
+
+    fun performRevokeDevice() {
+        val identity = deviceIdentity ?: return
+        val authenticated = serverAuthSession ?: return
+        val knownDevice = serverDeviceState ?: return
+        try {
+            runAction {
+                val revoked =
+                    DeviceRevocationService().revoke(authenticated, identity, knownDevice)
+                serverDeviceState = null
+                revokedDeviceId = revoked.deviceId
+                status = "Device revoked"
+            }
+        } finally {
+            serverAuthSession = null
+            deviceIdentity = null
         }
     }
 
@@ -772,21 +812,10 @@ fun KeysteadClientApp() {
                 }
             },
             onRevokeDevice = {
-                val identity = deviceIdentity ?: return@SyncPanel
-                val authenticated = serverAuthSession ?: return@SyncPanel
-                val knownDevice = serverDeviceState ?: return@SyncPanel
-                try {
-                    runAction {
-                        val revoked =
-                            DeviceRevocationService().revoke(authenticated, identity, knownDevice)
-                        serverDeviceState = null
-                        revokedDeviceId = revoked.deviceId
-                        status = "Device revoked"
-                    }
-                } finally {
-                    serverAuthSession = null
-                    deviceIdentity = null
+                if (deviceIdentity == null || serverAuthSession == null || serverDeviceState == null) {
+                    return@SyncPanel
                 }
+                destructiveGate.request(DestructiveConfirmation.RevokeDevice)
             },
             onPublishKeyPackage = {
                 val current = session ?: return@SyncPanel
@@ -1093,19 +1122,10 @@ fun KeysteadClientApp() {
                 totpCode.takeIf { it.isNotEmpty() }?.let { clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now()) }
             },
             onDelete = {
-                val current = session ?: return@InspectorPanel
-                val id = selectedSecretId ?: return@InspectorPanel
-                runAction {
-                    current.delete(id)
-                    selectedSecretId = null
-                    revealLifecycle.clear()
-                    revealedValue = ""
-                    if (editingSecretId == id) {
-                        clearSecretEditor()
-                    }
-                    status = "Deleted secret"
-                    refresh(current)
-                }
+                val selected = selectedSecret ?: return@InspectorPanel
+                destructiveGate.request(
+                    DestructiveConfirmation.DeleteSecret(selected.id, selected.title)
+                )
             },
             onEdit = {
                 val current = session ?: return@InspectorPanel
@@ -1156,6 +1176,26 @@ fun KeysteadClientApp() {
                     recordCount = secrets.size,
                 )
         }
+    }
+    val pendingDestructive = destructiveGate.pending
+    if (pendingDestructive != null) {
+        AlertDialog(
+            onDismissRequest = { destructiveGate.cancel() },
+            title = { Text(pendingDestructive.title) },
+            text = { Text(pendingDestructive.message) },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (val confirmed = destructiveGate.confirm()) {
+                        is DestructiveConfirmation.DeleteSecret -> performDeleteSecret(confirmed.secretId)
+                        DestructiveConfirmation.RevokeDevice -> performRevokeDevice()
+                        null -> {}
+                    }
+                }) { Text("Confirm") }
+            },
+            dismissButton = {
+                TextButton(onClick = { destructiveGate.cancel() }) { Text("Cancel") }
+            },
+        )
     }
 }
 
