@@ -126,6 +126,7 @@ fun KeysteadClientApp() {
     var provider by remember { mutableStateOf("") }
     var software by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("") }
+    var expiry by remember { mutableStateOf("") }
     var structuredFields by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var editingSecretId by remember { mutableStateOf<String?>(null) }
     var serverUrl by remember { mutableStateOf("http://localhost:8080") }
@@ -156,6 +157,7 @@ fun KeysteadClientApp() {
         provider = ""
         software = ""
         account = ""
+        expiry = ""
         structuredFields = emptyMap()
         editingSecretId = null
     }
@@ -538,6 +540,8 @@ fun KeysteadClientApp() {
             onSoftwareChange = { software = it },
             account = account,
             onAccountChange = { account = it },
+            expiry = expiry,
+            onExpiryChange = { expiry = it },
             structuredFields = structuredFields,
             onStructuredFieldChange = { name, value ->
                 structuredFields = structuredFields + (name to value)
@@ -619,6 +623,7 @@ fun KeysteadClientApp() {
                                 provider = provider.ifBlank { null },
                                 software = software.ifBlank { null },
                                 account = account.ifBlank { null },
+                                expiry = expiry.ifBlank { null },
                             )
                         } else {
                             val spec = SecretFormModel.specFor(secretType)
@@ -630,6 +635,7 @@ fun KeysteadClientApp() {
                                 provider = provider.ifBlank { spec.defaultProvider },
                                 software = software.ifBlank { spec.defaultSoftware },
                                 account = account.ifBlank { null },
+                                expiry = expiry.ifBlank { null },
                             )
                         }
                         status = "Updated secret"
@@ -644,6 +650,7 @@ fun KeysteadClientApp() {
                                 provider = provider.ifBlank { null },
                                 software = software.ifBlank { null },
                                 account = account.ifBlank { null },
+                                expiry = expiry.ifBlank { null },
                             )
                         } else {
                             val spec = SecretFormModel.specFor(secretType)
@@ -655,6 +662,7 @@ fun KeysteadClientApp() {
                                 provider = provider.ifBlank { spec.defaultProvider },
                                 software = software.ifBlank { spec.defaultSoftware },
                                 account = account.ifBlank { null },
+                                expiry = expiry.ifBlank { null },
                             )
                         }
                         status = "Saved secret"
@@ -1202,6 +1210,7 @@ fun KeysteadClientApp() {
                     provider = snapshot.provider.orEmpty()
                     software = snapshot.software.orEmpty()
                     account = snapshot.account.orEmpty()
+                    expiry = snapshot.expiry.orEmpty()
                     structuredFields = snapshot.fields
                     editingSecretId = snapshot.id
                     status = "Loaded secret for edit"
@@ -1410,6 +1419,8 @@ private fun AddSecretPanel(
     onSoftwareChange: (String) -> Unit,
     account: String,
     onAccountChange: (String) -> Unit,
+    expiry: String,
+    onExpiryChange: (String) -> Unit,
     structuredFields: Map<String, String>,
     onStructuredFieldChange: (String, String) -> Unit,
     onGenerateApiToken: () -> Unit,
@@ -1564,6 +1575,14 @@ private fun AddSecretPanel(
                 modifier = Modifier.weight(1f),
             )
         }
+        OutlinedTextField(
+            expiry,
+            onExpiryChange,
+            label = { Text("Expiry (optional, YYYY-MM-DD)") },
+            enabled = enabled,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(onClick = onSave, enabled = enabled && canSave, modifier = Modifier.weight(1f)) {
                 Text(if (!enabled) "Open vault first" else if (editing) "Update selected" else "Save secret")
@@ -2202,6 +2221,12 @@ private fun SecretListPanel(
             groupingMode = groupingMode,
             onGroupingChange = onGroupingChange,
         )
+        val expiryStates = remember(secrets) { secrets.map { SecretExpiry.state(it.expiry) } }
+        val expiredCount = expiryStates.count { it?.status == SecretExpiryStatus.EXPIRED }
+        val dueSoonCount = expiryStates.count { it?.status == SecretExpiryStatus.DUE_SOON }
+        if (expiredCount > 0 || dueSoonCount > 0) {
+            ExpiryReminderBanner(expiredCount = expiredCount, dueSoonCount = dueSoonCount)
+        }
         if (secrets.isEmpty()) {
             EmptyState()
         } else if (groupingMode == SecretGroupingMode.NONE) {
@@ -2447,6 +2472,13 @@ private fun PanelCard(modifier: Modifier = Modifier, content: @Composable Column
 @Composable
 private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> Unit) {
     val accent = if (selected) Blue else Border
+    val expiryState = SecretExpiry.state(secret.expiry)
+    val expiryBadge =
+        if (expiryState != null && expiryState.status != SecretExpiryStatus.ACTIVE) {
+            expiryState
+        } else {
+            null
+        }
     Card(backgroundColor = if (selected) Color(0xFFF1F5FF) else Color.White, elevation = 0.dp, border = BorderStroke(1.dp, accent)) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(modifier = Modifier.width(4.dp).height(42.dp).background(accent))
@@ -2455,6 +2487,16 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
                 Text(secret.title, color = Ink, fontWeight = FontWeight.SemiBold)
                 Text(typeLabel(secret.type), color = Blue, style = MaterialTheme.typography.caption)
                 Text(secret.id.take(18), color = Muted, style = MaterialTheme.typography.caption)
+                if (expiryBadge != null) {
+                    val badgeColor =
+                        if (expiryBadge.status == SecretExpiryStatus.EXPIRED) Color(0xFFD93025) else Amber
+                    Text(
+                        expiryBadge.label(),
+                        color = badgeColor,
+                        style = MaterialTheme.typography.caption,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
             OutlinedButton(onClick = onClick) { Text(if (selected) "Selected" else "Select") }
         }
@@ -2470,6 +2512,27 @@ private fun EmptyState() {
     ) {
         Text("No saved secrets", color = Ink, fontWeight = FontWeight.SemiBold)
         Text("Saved secrets will appear here.", color = Muted)
+    }
+}
+
+@Composable
+private fun ExpiryReminderBanner(expiredCount: Int, dueSoonCount: Int) {
+    val parts = buildList {
+        if (expiredCount > 0) add("$expiredCount expired")
+        if (dueSoonCount > 0) add("$dueSoonCount expiring soon")
+    }
+    Surface(color = Amber.copy(alpha = 0.12f), border = BorderStroke(1.dp, Amber.copy(alpha = 0.6f))) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                "Expiry reminders: ${parts.joinToString(", ")}",
+                color = Amber,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text("Review and rotate these secrets.", color = Muted, style = MaterialTheme.typography.caption)
+        }
     }
 }
 

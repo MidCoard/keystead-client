@@ -36,6 +36,7 @@ data class SecretListItem(
     val provider: String?,
     val software: String?,
     val account: String?,
+    val expiry: String? = null,
 )
 
 data class SecretEditSnapshot(
@@ -49,6 +50,7 @@ data class SecretEditSnapshot(
     val provider: String? = null,
     val software: String? = null,
     val account: String? = null,
+    val expiry: String? = null,
     val fields: Map<String, String> = emptyMap(),
 ) {
     override fun toString(): String = "SecretEditSnapshot(<redacted>)"
@@ -116,6 +118,7 @@ class LocalVaultSession private constructor(
         provider: String? = null,
         software: String? = null,
         account: String? = null,
+        expiry: String? = null,
     ): String {
         SecretBuffer.fromChars(username.toCharArray()).use { usernameBuffer ->
             SecretBuffer.fromChars(password.toCharArray()).use { passwordBuffer ->
@@ -127,6 +130,9 @@ class LocalVaultSession private constructor(
                             .password(passwordBuffer)
                         if (!url.isNullOrBlank()) {
                             draft.url(url)
+                        }
+                        if (!expiry.isNullOrBlank()) {
+                            draft.attribute("expiry", expiry)
                         }
                     }
                 return secretId.value().toString()
@@ -144,6 +150,7 @@ class LocalVaultSession private constructor(
         provider: String? = null,
         software: String? = null,
         account: String? = null,
+        expiry: String? = null,
     ) {
         SecretBuffer.fromChars(username.toCharArray()).use { usernameBuffer ->
             SecretBuffer.fromChars(password.toCharArray()).use { passwordBuffer ->
@@ -154,6 +161,9 @@ class LocalVaultSession private constructor(
                         .password(passwordBuffer)
                     if (!url.isNullOrBlank()) {
                         draft.url(url)
+                    }
+                    if (!expiry.isNullOrBlank()) {
+                        draft.attribute("expiry", expiry)
                     }
                 }
             }
@@ -173,6 +183,7 @@ class LocalVaultSession private constructor(
         provider: String? = null,
         software: String? = null,
         account: String? = null,
+        expiry: String? = null,
     ): String {
         val buffers = fields.mapValues { SecretBuffer.fromChars(it.value.toCharArray()) }
         return try {
@@ -180,6 +191,9 @@ class LocalVaultSession private constructor(
                 handle.saveSecret(type) { draft ->
                     draft.title(title)
                         .classification(SecretClassification(category, provider, software, account))
+                    if (!expiry.isNullOrBlank()) {
+                        draft.attribute("expiry", expiry)
+                    }
                     buffers.forEach { (name, buffer) -> draft.field(name, buffer) }
                 }
             secretId.value().toString()
@@ -196,12 +210,16 @@ class LocalVaultSession private constructor(
         provider: String? = null,
         software: String? = null,
         account: String? = null,
+        expiry: String? = null,
     ) {
         val buffers = fields.mapValues { SecretBuffer.fromChars(it.value.toCharArray()) }
         return try {
             handle.updateSecret(SecretId(UUID.fromString(secretId))) { draft ->
                 draft.title(title)
                     .classification(SecretClassification(category, provider, software, account))
+                if (!expiry.isNullOrBlank()) {
+                    draft.attribute("expiry", expiry)
+                }
                 buffers.forEach { (name, buffer) -> draft.field(name, buffer) }
             }
         } finally {
@@ -220,6 +238,7 @@ class LocalVaultSession private constructor(
                     provider = it.classification().provider(),
                     software = it.classification().software(),
                     account = it.classification().account(),
+                    expiry = it.profile().attributes()["expiry"],
                 )
             }
 
@@ -358,6 +377,7 @@ class LocalVaultSession private constructor(
         var provider: String? = null
         var software: String? = null
         var account: String? = null
+        var expiry: String? = null
         handle.withLogin(SecretId(UUID.fromString(secretId))) { view ->
             val metadata = view.metadata()
             title = metadata.title()
@@ -365,6 +385,7 @@ class LocalVaultSession private constructor(
             provider = metadata.classification().provider()
             software = metadata.classification().software()
             account = metadata.classification().account()
+            expiry = metadata.profile().attributes()["expiry"]
             url = view.url().orElse("")
             view.withUsername { username = String(it) }
             view.withPassword { password = String(it) }
@@ -380,6 +401,7 @@ class LocalVaultSession private constructor(
             provider = provider,
             software = software,
             account = account,
+            expiry = expiry,
         )
     }
 
@@ -390,6 +412,7 @@ class LocalVaultSession private constructor(
         var provider: String? = null
         var software: String? = null
         var account: String? = null
+        var expiry: String? = null
         var fields = emptyMap<String, String>()
         handle.withSecret(SecretId(UUID.fromString(secretId))) { view ->
             val metadata = view.metadata()
@@ -399,6 +422,7 @@ class LocalVaultSession private constructor(
             provider = metadata.classification().provider()
             software = metadata.classification().software()
             account = metadata.classification().account()
+            expiry = metadata.profile().attributes()["expiry"]
             fields =
                 view.fieldNames().associateWith { name ->
                     var value = ""
@@ -414,6 +438,7 @@ class LocalVaultSession private constructor(
             provider = provider,
             software = software,
             account = account,
+            expiry = expiry,
             fields = fields,
         )
     }
