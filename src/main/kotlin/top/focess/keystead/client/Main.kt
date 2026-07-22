@@ -116,6 +116,7 @@ fun KeysteadClientApp() {
     var totpCode by remember { mutableStateOf("") }
     var totpSecondsRemaining by remember { mutableStateOf(0) }
     val destructiveGate = remember { ConfirmationGate<DestructiveConfirmation>() }
+    var conflictAssessment by remember { mutableStateOf<ConflictAssessment?>(null) }
     var secretType by remember { mutableStateOf(SecretType.LOGIN_PASSWORD) }
     var title by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -289,6 +290,7 @@ fun KeysteadClientApp() {
         try {
             action()
         } catch (error: KeysteadRevisionConflictException) {
+            conflictAssessment = ConflictAssessment.from(error)
             status = SyncStatusFormatter.messageFor(error)
         } catch (error: KeysteadAuthenticationException) {
             serverAuthSession?.close()
@@ -388,6 +390,18 @@ fun KeysteadClientApp() {
             Path.of(vaultDirectory).parent?.resolve("sync")
                 ?: Path.of(vaultDirectory).resolve("sync"),
         )
+
+    fun performPullAndRetry() {
+        val current = session ?: return
+        runAction {
+            val state = syncStateStore()
+            val pulled = current.pullPendingRecordsFrom(serverClient(), state)
+            val pushed = current.pushPendingRecordsTo(serverClient(), state)
+            conflictAssessment = null
+            status = "Pulled $pulled and re-pushed $pushed records"
+            refresh(current)
+        }
+    }
 
     fun rotationStateStore(): VaultRotationStateStore =
         VaultRotationStateStore(
@@ -830,6 +844,7 @@ fun KeysteadClientApp() {
                 runAction {
                     val state = syncStateStore()
                     val pushed = current.pushPendingRecordsTo(serverClient(), state)
+                    conflictAssessment = null
                     status =
                         "Pushed $pushed records; cursor ${state.lastPushedRevision(vaultId)}"
                 }
@@ -839,6 +854,7 @@ fun KeysteadClientApp() {
                 runAction {
                     val state = syncStateStore()
                     val pulled = current.pullPendingRecordsFrom(serverClient(), state)
+                    conflictAssessment = null
                     status =
                         "Pulled $pulled records; cursor ${state.lastPulledRevision(vaultId)}"
                     refresh(current)
@@ -859,6 +875,9 @@ fun KeysteadClientApp() {
                     refresh(opened)
                 }
             },
+            conflictAssessment = conflictAssessment,
+            onPullAndRetry = { performPullAndRetry() },
+            onDismissConflict = { conflictAssessment = null },
             )
             LifecyclePanel(
                 authenticated = serverAuthSession != null,
@@ -1552,6 +1571,9 @@ private fun SyncPanel(
     onPublishKeyPackage: () -> Unit,
     onPush: () -> Unit,
     onPull: () -> Unit,
+    onPullAndRetry: () -> Unit,
+    onDismissConflict: () -> Unit,
+    conflictAssessment: ConflictAssessment?,
     onOpenProvisioned: () -> Unit,
 ) {
     val loginReady = SyncFormModel.canLogin(serverUrl, username, password)
@@ -1734,6 +1756,38 @@ private fun SyncPanel(
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Pull")
+            }
+        }
+        conflictAssessment?.let { assessment ->
+            Surface(
+                color = Amber.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, Amber.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(assessment.title, color = Amber, fontWeight = FontWeight.SemiBold)
+                    Text(assessment.message, color = Ink, style = MaterialTheme.typography.caption)
+                    assessment.warning?.let {
+                        Text(it, color = Muted, style = MaterialTheme.typography.caption)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (assessment.canAutoRecover) {
+                            Button(onClick = onPullAndRetry, modifier = Modifier.weight(1f)) {
+                                Text("Pull and retry")
+                            }
+                        } else {
+                            Button(onClick = onPull, modifier = Modifier.weight(1f)) {
+                                Text("Pull latest")
+                            }
+                        }
+                        OutlinedButton(onClick = onDismissConflict, modifier = Modifier.weight(1f)) {
+                            Text("Dismiss")
+                        }
+                    }
+                }
             }
         }
         Text(
