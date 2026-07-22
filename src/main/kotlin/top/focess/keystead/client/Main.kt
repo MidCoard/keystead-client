@@ -403,6 +403,40 @@ fun KeysteadClientApp() {
         }
     }
 
+    fun performExportBackup() {
+        val current = session ?: return
+        val owner: java.awt.Frame? = null
+        val dialog = java.awt.FileDialog(owner, "Export Keystead backup", java.awt.FileDialog.SAVE)
+        dialog.file = "keystead-backup.zip"
+        dialog.isVisible = true
+        val fileName = dialog.file ?: return
+        val target = java.io.File(dialog.directory, fileName)
+        runAction {
+            java.io.FileOutputStream(target).use { output ->
+                VaultBackup.export(Path.of(vaultDirectory), current.vaultIdValue(), output)
+            }
+            status = "Exported backup to ${target.name}"
+        }
+    }
+
+    fun performRestoreBackup() {
+        val current = session ?: return
+        val owner: java.awt.Frame? = null
+        val dialog = java.awt.FileDialog(owner, "Restore Keystead backup", java.awt.FileDialog.LOAD)
+        dialog.file = "keystead-backup.zip"
+        dialog.isVisible = true
+        val fileName = dialog.file ?: return
+        val source = java.io.File(dialog.directory, fileName)
+        runAction {
+            val report =
+                java.io.FileInputStream(source).use { input ->
+                    VaultBackup.restore(Path.of(vaultDirectory), current.vaultIdValue(), input)
+                }
+            status = BackupReportFormatter.summarize(report)
+            refresh(current)
+        }
+    }
+
     fun rotationStateStore(): VaultRotationStateStore =
         VaultRotationStateStore(
             (Path.of(vaultDirectory).parent ?: Path.of(vaultDirectory))
@@ -878,6 +912,8 @@ fun KeysteadClientApp() {
             conflictAssessment = conflictAssessment,
             onPullAndRetry = { performPullAndRetry() },
             onDismissConflict = { conflictAssessment = null },
+            onExportBackup = { performExportBackup() },
+            onRestoreBackup = { performRestoreBackup() },
             )
             LifecyclePanel(
                 authenticated = serverAuthSession != null,
@@ -1575,6 +1611,8 @@ private fun SyncPanel(
     onDismissConflict: () -> Unit,
     conflictAssessment: ConflictAssessment?,
     onOpenProvisioned: () -> Unit,
+    onExportBackup: () -> Unit,
+    onRestoreBackup: () -> Unit,
 ) {
     val loginReady = SyncFormModel.canLogin(serverUrl, username, password)
     val deviceLoginReady =
@@ -1788,6 +1826,23 @@ private fun SyncPanel(
                         }
                     }
                 }
+            }
+        }
+        Text("Backup", color = Muted, style = MaterialTheme.typography.caption)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onExportBackup,
+                enabled = vaultOpen,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Export backup")
+            }
+            OutlinedButton(
+                onClick = onRestoreBackup,
+                enabled = vaultOpen,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Restore backup")
             }
         }
         Text(
