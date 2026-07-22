@@ -106,6 +106,7 @@ fun KeysteadClientApp() {
     var filterCategory by remember { mutableStateOf("") }
     var filterProvider by remember { mutableStateOf("") }
     var filterSoftware by remember { mutableStateOf("") }
+    var groupingMode by remember { mutableStateOf(SecretGroupingMode.NONE) }
     var revealedValue by remember { mutableStateOf("") }
     var revealGeneration by remember { mutableStateOf(0L) }
     val revealLifecycle = remember { RevealLifecycle() }
@@ -1074,6 +1075,8 @@ fun KeysteadClientApp() {
                 filterProvider = ""
                 filterSoftware = ""
             },
+            groupingMode = groupingMode,
+            onGroupingChange = { groupingMode = it },
             selectedSecretId = selectedSecretId,
             onSelect = {
                 if (it != selectedSecretId) {
@@ -2069,6 +2072,8 @@ private fun SecretListPanel(
     onProviderChange: (String) -> Unit,
     onSoftwareChange: (String) -> Unit,
     onClearFilters: () -> Unit,
+    groupingMode: SecretGroupingMode,
+    onGroupingChange: (SecretGroupingMode) -> Unit,
     selectedSecretId: String?,
     onSelect: (String) -> Unit,
     modifier: Modifier,
@@ -2085,15 +2090,43 @@ private fun SecretListPanel(
             onProviderChange = onProviderChange,
             onSoftwareChange = onSoftwareChange,
             onClearFilters = onClearFilters,
+            groupingMode = groupingMode,
+            onGroupingChange = onGroupingChange,
         )
         if (secrets.isEmpty()) {
             EmptyState()
-        } else {
+        } else if (groupingMode == SecretGroupingMode.NONE) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(secrets) { secret ->
                     SecretRow(secret, secret.id == selectedSecretId) { onSelect(secret.id) }
                 }
             }
+        } else {
+            val groups = remember(secrets, groupingMode) { SecretGrouper.group(secrets, groupingMode) }
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                groups.forEach { group ->
+                    item(key = "header-${group.key}-${group.label}") {
+                        GroupHeader(group.label, group.secrets.size)
+                    }
+                    items(group.secrets, key = { "secret-${it.id}" }) { secret ->
+                        SecretRow(secret, secret.id == selectedSecretId) { onSelect(secret.id) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupHeader(label: String, count: Int) {
+    Surface(color = Canvas, border = BorderStroke(0.dp, Color.Transparent)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp, bottom = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, color = Blue, fontWeight = FontWeight.SemiBold)
+            Text("($count)", color = Muted, style = MaterialTheme.typography.caption)
         }
     }
 }
@@ -2109,6 +2142,8 @@ private fun SecretListFilters(
     onProviderChange: (String) -> Unit,
     onSoftwareChange: (String) -> Unit,
     onClearFilters: () -> Unit,
+    groupingMode: SecretGroupingMode,
+    onGroupingChange: (SecretGroupingMode) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2147,7 +2182,30 @@ private fun SecretListFilters(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        SecretGroupingSelector(groupingMode, onGroupingChange)
         Text("$shownCount of $totalCount shown", color = Muted, style = MaterialTheme.typography.caption)
+    }
+}
+
+@Composable
+private fun SecretGroupingSelector(
+    selected: SecretGroupingMode,
+    onGroupingChange: (SecretGroupingMode) -> Unit,
+) {
+    val modes = SecretGroupingMode.entries
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        modes.forEach { mode ->
+            val isSelected = selected == mode
+            if (isSelected) {
+                Button(onClick = { onGroupingChange(mode) }, modifier = Modifier.weight(1f)) {
+                    Text(mode.label)
+                }
+            } else {
+                OutlinedButton(onClick = { onGroupingChange(mode) }, modifier = Modifier.weight(1f)) {
+                    Text(mode.label)
+                }
+            }
+        }
     }
 }
 
