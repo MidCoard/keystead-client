@@ -40,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -2428,6 +2430,11 @@ private fun InspectorPanel(
                     style = MaterialTheme.typography.h5,
                     fontFamily = FontFamily.Monospace,
                     color = Ink,
+                    modifier =
+                        Modifier.semantics {
+                            contentDescription =
+                                if (showTotpCode) "Authentication code shown" else "Authentication code hidden"
+                        },
                 )
                 Text(
                     "${totpSecondsRemaining}s",
@@ -2479,7 +2486,19 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
         } else {
             null
         }
-    Card(backgroundColor = if (selected) Color(0xFFF1F5FF) else Color.White, elevation = 0.dp, border = BorderStroke(1.dp, accent)) {
+    val rowDescription = buildString {
+        append("Secret: ${secret.title}, ${typeLabel(secret.type)}")
+        expiryBadge?.let { append(", ${it.label()}") }
+    }
+    Card(
+        modifier =
+            Modifier.semantics(mergeDescendants = true) {
+                contentDescription = rowDescription
+            },
+        backgroundColor = if (selected) Color(0xFFF1F5FF) else Color.White,
+        elevation = 0.dp,
+        border = BorderStroke(1.dp, accent),
+    ) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(modifier = Modifier.width(4.dp).height(42.dp).background(accent))
             Spacer(Modifier.width(12.dp))
