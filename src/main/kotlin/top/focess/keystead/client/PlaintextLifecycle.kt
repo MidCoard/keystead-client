@@ -59,7 +59,8 @@ class ClipboardLifecycle(private val clipboard: ClipboardPort, private val durat
     }
     fun expire(now: Instant, ticket: ClipboardClearTicket): Boolean {
         if (ticket.generation != generation || now.isBefore(ticket.expiresAt)) return false
-        if (clipboard.text == null || digest(clipboard.text!!) != ticket.digest) return false
+        val text = clipboard.text
+        if (text == null || digest(text) != ticket.digest) return false
         clipboard.text = null
         return true
     }
