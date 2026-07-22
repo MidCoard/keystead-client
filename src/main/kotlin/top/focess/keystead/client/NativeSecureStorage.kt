@@ -108,8 +108,9 @@ class NativeSecureStorage(
                 val length = data.readInt()
                 if (length !in 16..MAX_CIPHERTEXT || length != data.available()) corrupt()
                 val ciphertext = ByteArray(length); data.readFully(ciphertext)
-                plaintext = crypt(Cipher.DECRYPT_MODE, nonce, ciphertext)
-                return SecureStorageCodec.decode(plaintext!!)
+                val plain = crypt(Cipher.DECRYPT_MODE, nonce, ciphertext)
+                plaintext = plain
+                return SecureStorageCodec.decode(plain)
             }
         } catch (error: OsSecretStoreException) {
             throw error
