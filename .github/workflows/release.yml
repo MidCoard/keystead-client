@@ -43,7 +43,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: keystead-client/build/compose/binaries/**/*
+          # Only the native installers belong on the GitHub Release. The build also
+          # produces an unpacked app-image (the JBR runtime, dependency JARs and
+          # native libs) under build/compose/binaries/main/app/ which must not be
+          # uploaded as release assets.
+          path: |
+            keystead-client/build/compose/binaries/**/*.msi
+            keystead-client/build/compose/binaries/**/*.dmg
+            keystead-client/build/compose/binaries/**/*.deb
+            keystead-client/build/compose/binaries/**/*.rpm
+            keystead-client/build/compose/binaries/**/*.exe
           if-no-files-found: error
 
   release:

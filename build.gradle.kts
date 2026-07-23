@@ -36,6 +36,12 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Keystead"
+            // The installer version is intentionally decoupled from the project's
+            // 0.x semver: the macOS Dmg/PkgBuild packagers reject any version whose
+            // MAJOR component is 0 (it must be an integer > 0), so a 0.2.0 project
+            // version cannot be used as the packageVersion. Keep a stable MAJOR>=1
+            // installer version here until the project reaches a real 1.0; bump the
+            // minor/patch manually per release if desired.
             packageVersion = "1.0.0"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
