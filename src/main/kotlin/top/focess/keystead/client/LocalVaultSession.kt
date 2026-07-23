@@ -7,6 +7,7 @@ import java.util.Base64
 import java.util.UUID
 import top.focess.keystead.crypto.DefaultCryptoService
 import top.focess.keystead.memory.SecretBuffer
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.SecretClassification
 import top.focess.keystead.model.SecretId
 import top.focess.keystead.model.SecretType
@@ -94,9 +95,9 @@ class LocalVaultSession private constructor(
                 context,
             )
         } finally {
-            encrypted.fill(0)
-            privateKey.fill(0)
-            context.fill(0)
+            Wipe.wipe(encrypted)
+            Wipe.wipe(privateKey)
+            Wipe.wipe(context)
         }
     }
 
@@ -251,7 +252,7 @@ class LocalVaultSession private constructor(
         return try {
             String(chars)
         } finally {
-            chars.fill('\u0000')
+            Wipe.wipe(chars)
         }
     }
 
@@ -264,7 +265,7 @@ class LocalVaultSession private constructor(
         return try {
             String(chars)
         } finally {
-            chars.fill('\u0000')
+            Wipe.wipe(chars)
         }
     }
 
@@ -468,7 +469,7 @@ class LocalVaultSession private constructor(
             client.putVaultKeyPackage(vaultId, deviceId, keyPackage)
             keyPackage
         } finally {
-            encryptedVaultKey.fill(0)
+            Wipe.wipe(encryptedVaultKey)
         }
     }
 
@@ -495,8 +496,8 @@ class LocalVaultSession private constructor(
             )
             publishVaultKeyPackage(client, enrolledDevice)
         } finally {
-            proofPublicKey.fill(0)
-            wrappingPublicKey.fill(0)
+            Wipe.wipe(proofPublicKey)
+            Wipe.wipe(wrappingPublicKey)
         }
     }
 
@@ -520,7 +521,7 @@ class LocalVaultSession private constructor(
                 devicePublicKey = publicKey,
             )
         } finally {
-            publicKey.fill(0)
+            Wipe.wipe(publicKey)
         }
     }
 
@@ -547,8 +548,8 @@ class LocalVaultSession private constructor(
             previous.close()
             replacement.vaultKeyId().value()
         } finally {
-            password.fill('\u0000')
-            masterPassword.fill('\u0000')
+            Wipe.wipe(password)
+            Wipe.wipe(masterPassword)
         }
     }
 
@@ -578,8 +579,8 @@ class LocalVaultSession private constructor(
                 encryptedVaultKey = Base64.getEncoder().encodeToString(encryptedVaultKey),
             ).also { client.putAutomationVaultKeyPackage(vaultId, principalId, it) }
         } finally {
-            encryptedVaultKey.fill(0)
-            context.fill(0)
+            Wipe.wipe(encryptedVaultKey)
+            Wipe.wipe(context)
         }
     }
 
@@ -614,8 +615,8 @@ class LocalVaultSession private constructor(
                     }
                 LocalVaultSession(service, handle)
             } finally {
-                password.fill('\u0000')
-                masterPassword.fill('\u0000')
+                Wipe.wipe(password)
+                Wipe.wipe(masterPassword)
             }
         }
 
@@ -648,9 +649,9 @@ class LocalVaultSession private constructor(
                     }
                 LocalVaultSession(service, handle)
             } finally {
-                privateKey.fill(0)
-                context.fill(0)
-                wrappedVaultKey?.fill(0)
+                Wipe.wipe(privateKey)
+                Wipe.wipe(context)
+                Wipe.wipe(wrappedVaultKey)
             }
         }
 
@@ -670,7 +671,7 @@ class LocalVaultSession private constructor(
                     client = client,
                 )
             } finally {
-                privateKey.fill(0)
+                Wipe.wipe(privateKey)
             }
         }
 

@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import top.focess.keystead.generator.DefaultGpgKeyGenerator
 import top.focess.keystead.generator.GpgKeyPolicy
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.SecretTaxonomy
 
 data class GpgKeyDraft(
@@ -34,7 +35,7 @@ object GpgKeyDraftGenerator {
             }
         } finally {
             // The policy copies the passphrase and leaves the caller-owned array to us.
-            passphrase.fill('\u0000')
+            Wipe.wipe(passphrase)
         }
     }
 }

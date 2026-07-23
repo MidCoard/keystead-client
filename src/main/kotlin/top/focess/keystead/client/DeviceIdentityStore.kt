@@ -29,6 +29,7 @@ import javax.security.auth.DestroyFailedException
 import top.focess.keystead.crypto.CryptoException
 import top.focess.keystead.crypto.DefaultCryptoService
 import top.focess.keystead.crypto.DeviceKeyPair
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.KeyId
 
 class LocalDeviceIdentity(
@@ -91,9 +92,9 @@ class LocalDeviceIdentity(
         } catch (error: GeneralSecurityException) {
             throw CryptoException("Could not sign device challenge", error)
         } finally {
-            encodedPrivateKey.fill(0)
-            payload.fill(0)
-            signatureBytes?.fill(0)
+            Wipe.wipe(encodedPrivateKey)
+            Wipe.wipe(payload)
+            Wipe.wipe(signatureBytes)
             destroy(privateKey)
         }
     }
@@ -101,8 +102,8 @@ class LocalDeviceIdentity(
     @Synchronized
     override fun close() {
         if (!closed) {
-            privateKeyBytes.fill(0)
-            proofPrivateKeyBytes.fill(0)
+            Wipe.wipe(privateKeyBytes)
+            Wipe.wipe(proofPrivateKeyBytes)
             closed = true
         }
     }
@@ -158,8 +159,8 @@ class DeviceIdentityStore(
                 }
             }
         } finally {
-            password.fill('\u0000')
-            passphrase.fill('\u0000')
+            Wipe.wipe(password)
+            Wipe.wipe(passphrase)
         }
     }
 
@@ -183,8 +184,8 @@ class DeviceIdentityStore(
             return try {
                 identity(deviceId, device.keyAlgorithm(), publicKey, privateKey, proof)
             } finally {
-                publicKey.fill(0)
-                privateKey.fill(0)
+                Wipe.wipe(publicKey)
+                Wipe.wipe(privateKey)
                 proof.close()
             }
         }
@@ -193,7 +194,7 @@ class DeviceIdentityStore(
     fun migrateToNative(deviceId: String, passphrase: CharArray): DeviceIdentityMigrationResult {
         val properties = if (Files.exists(identityFile)) loadProperties() else null
         if (properties?.getProperty("formatVersion") == FORMAT_VERSION_3) {
-            passphrase.fill('\u0000')
+            Wipe.wipe(passphrase)
             return DeviceIdentityMigrationResult.AlreadyNative
         }
         val identity = createOrLoad(deviceId, passphrase)
@@ -221,7 +222,7 @@ class DeviceIdentityStore(
                     identity.close()
                     throw error
                 }
-            } finally { publicKey.fill(0); privateKey.fill(0); proof.close() }
+            } finally { Wipe.wipe(publicKey); Wipe.wipe(privateKey); proof.close() }
         }
     }
 
@@ -238,7 +239,7 @@ class DeviceIdentityStore(
         val proofPublicKey = bytes(properties, "proofPublicKey")
         return try {
             LocalDeviceIdentity(deviceId, required(properties, "keyAlgorithm"), publicKey, privateKey, required(properties, "proofKeyAlgorithm"), proofPublicKey, proofPrivateKey)
-        } finally { privateKey.fill(0); proofPrivateKey.fill(0); publicKey.fill(0); proofPublicKey.fill(0) }
+        } finally { Wipe.wipe(privateKey); Wipe.wipe(proofPrivateKey); Wipe.wipe(publicKey); Wipe.wipe(proofPublicKey) }
     }
 
     private fun saveNativeAndVerify(identity: LocalDeviceIdentity, storage: SecureStorage) {
@@ -257,7 +258,7 @@ class DeviceIdentityStore(
                     candidate.signDeviceChallenge("native-migration", "verification")
                     verifyWrappingKeyPair(candidate)
                 }
-            } finally { reloadedWrapping.fill(0); reloadedProof.fill(0) }
+            } finally { Wipe.wipe(reloadedWrapping); Wipe.wipe(reloadedProof) }
             val properties = Properties()
             properties.setProperty("formatVersion", FORMAT_VERSION_3)
             properties.setProperty("deviceId", identity.deviceId)
@@ -271,7 +272,7 @@ class DeviceIdentityStore(
             if (savedProof) runCatching { storage.delete(proofPrivateKey(identity.deviceId)) }
             if (savedWrapping) runCatching { storage.delete(wrappingPrivateKey(identity.deviceId)) }
             throw error
-        } finally { wrapping.fill(0); proof.fill(0) }
+        } finally { Wipe.wipe(wrapping); Wipe.wipe(proof) }
     }
 
     private fun wrappingPrivateKey(deviceId: String) = SecureStorageKey("keystead-device", deviceId, "wrapping-private-key")
@@ -292,15 +293,15 @@ class DeviceIdentityStore(
                         opened.copyBytes { actual = it.copyOf() }
                         check(expected.contentEquals(actual)) { "Native device identity verification failed" }
                     } finally {
-                        expected.fill(0)
-                        actual.fill(0)
+                        Wipe.wipe(expected)
+                        Wipe.wipe(actual)
                     }
                 }
             } finally {
-                wrapped.fill(0)
-                publicKey.fill(0)
-                privateKey.fill(0)
-                context.fill(0)
+                Wipe.wipe(wrapped)
+                Wipe.wipe(publicKey)
+                Wipe.wipe(privateKey)
+                Wipe.wipe(context)
             }
         }
     }
@@ -338,8 +339,8 @@ class DeviceIdentityStore(
                 )
                 return identity(deviceId, device.keyAlgorithm(), publicKey, privateKey, proof)
             } finally {
-                publicKey.fill(0)
-                privateKey.fill(0)
+                Wipe.wipe(publicKey)
+                Wipe.wipe(privateKey)
                 proof?.close()
             }
         }
@@ -376,13 +377,13 @@ class DeviceIdentityStore(
                 }
             identity(storedDeviceId, keyAlgorithm, publicKey, privateKey, proof)
         } finally {
-            publicKey.fill(0)
-            salt.fill(0)
-            nonce.fill(0)
-            encryptedPrivateKey.fill(0)
-            wrappingAad.fill(0)
-            wrappingKey.fill(0)
-            privateKey?.fill(0)
+            Wipe.wipe(publicKey)
+            Wipe.wipe(salt)
+            Wipe.wipe(nonce)
+            Wipe.wipe(encryptedPrivateKey)
+            Wipe.wipe(wrappingAad)
+            Wipe.wipe(wrappingKey)
+            Wipe.wipe(privateKey)
             proof?.close()
         }
     }
@@ -405,13 +406,13 @@ class DeviceIdentityStore(
             try {
                 ProofKeyMaterial(publicKey, privateKey)
             } finally {
-                privateKey.fill(0)
+                Wipe.wipe(privateKey)
             }
         } finally {
-            publicKey.fill(0)
-            nonce.fill(0)
-            encryptedPrivateKey.fill(0)
-            proofAad.fill(0)
+            Wipe.wipe(publicKey)
+            Wipe.wipe(nonce)
+            Wipe.wipe(encryptedPrivateKey)
+            Wipe.wipe(proofAad)
         }
     }
 
@@ -461,14 +462,14 @@ class DeviceIdentityStore(
             )
             writePropertiesAtomically(properties)
         } finally {
-            salt.fill(0)
-            nonce.fill(0)
-            proofNonce.fill(0)
-            wrappingAad.fill(0)
-            proofAad.fill(0)
-            wrappingKey.fill(0)
-            encryptedPrivateKey.fill(0)
-            encryptedProofPrivateKey.fill(0)
+            Wipe.wipe(salt)
+            Wipe.wipe(nonce)
+            Wipe.wipe(proofNonce)
+            Wipe.wipe(wrappingAad)
+            Wipe.wipe(proofAad)
+            Wipe.wipe(wrappingKey)
+            Wipe.wipe(encryptedPrivateKey)
+            Wipe.wipe(encryptedProofPrivateKey)
         }
     }
 
@@ -502,9 +503,9 @@ class DeviceIdentityStore(
             )
             writePropertiesAtomically(properties)
         } finally {
-            nonce.fill(0)
-            proofAad.fill(0)
-            encryptedProofPrivateKey.fill(0)
+            Wipe.wipe(nonce)
+            Wipe.wipe(proofAad)
+            Wipe.wipe(encryptedProofPrivateKey)
         }
     }
 
@@ -516,8 +517,8 @@ class DeviceIdentityStore(
             try {
                 ProofKeyMaterial(publicKey, privateKey)
             } finally {
-                publicKey.fill(0)
-                privateKey.fill(0)
+                Wipe.wipe(publicKey)
+                Wipe.wipe(privateKey)
                 try {
                     pair.private.destroy()
                 } catch (_: DestroyFailedException) {
@@ -572,7 +573,7 @@ class DeviceIdentityStore(
         } catch (error: GeneralSecurityException) {
             throw CryptoException("Could not derive device identity wrapping key", error)
         } finally {
-            passwordCopy.fill('\u0000')
+            Wipe.wipe(passwordCopy)
             spec.clearPassword()
         }
     }
@@ -648,7 +649,7 @@ class DeviceIdentityStore(
         val privateKey = privateKey.copyOf()
 
         override fun close() {
-            privateKey.fill(0)
+            Wipe.wipe(privateKey)
         }
 
         override fun toString(): String = "ProofKeyMaterial(<redacted>)"

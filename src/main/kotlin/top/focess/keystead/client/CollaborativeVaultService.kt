@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import java.util.Base64
 import top.focess.keystead.crypto.DefaultCryptoService
+import top.focess.keystead.memory.Wipe
 
 class CollaborativeVaultService(
     private val client: KeysteadServerClient,
@@ -28,8 +29,8 @@ class CollaborativeVaultService(
                             ),
                         )
                         published++
-                    } finally { encrypted.fill(0) }
-                } finally { publicKey.fill(0); context.fill(0) }
+                    } finally { Wipe.wipe(encrypted) }
+                } finally { Wipe.wipe(publicKey); Wipe.wipe(context) }
             }
         return published
     }

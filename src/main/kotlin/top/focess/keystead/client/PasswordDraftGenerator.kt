@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import top.focess.keystead.generator.DefaultPasswordGenerator
 import top.focess.keystead.generator.PasswordPolicy
+import top.focess.keystead.memory.Wipe
 
 object PasswordDraftGenerator {
     private const val DefaultLength = 24
@@ -24,7 +25,7 @@ object PasswordDraftGenerator {
             return try {
                 String(generated)
             } finally {
-                generated.fill('\u0000')
+                Wipe.wipe(generated)
             }
         }
     }

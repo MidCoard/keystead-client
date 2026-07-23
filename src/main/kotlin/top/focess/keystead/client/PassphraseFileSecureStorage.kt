@@ -13,6 +13,7 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import top.focess.keystead.memory.Wipe
 
 /** Encrypted file fallback; this is deliberately not advertised as OS-protected. */
 class PassphraseFileSecureStorage(
@@ -26,11 +27,11 @@ class PassphraseFileSecureStorage(
 
     init { loadFile() }
 
-    @Synchronized override fun save(key: SecureStorageKey, value: ByteArray) { values[key]?.fill(0); values[key] = value.copyOf(); persist() }
+    @Synchronized override fun save(key: SecureStorageKey, value: ByteArray) { Wipe.wipe(values[key]); values[key] = value.copyOf(); persist() }
     @Synchronized override fun load(key: SecureStorageKey): ByteArray? = values[key]?.copyOf()
-    @Synchronized override fun delete(key: SecureStorageKey) { values.remove(key)?.fill(0); persist() }
+    @Synchronized override fun delete(key: SecureStorageKey) { Wipe.wipe(values.remove(key)); persist() }
     @Synchronized override fun listKeys(namespace: String, account: String): Set<String> = values.keys.filter { it.namespace == namespace && it.account == account }.map { it.name }.toSet()
-    @Synchronized fun close() { values.values.forEach { it.fill(0) }; values.clear(); password.fill('\u0000') }
+    @Synchronized fun close() { values.values.forEach { Wipe.wipe(it) }; values.clear(); Wipe.wipe(password) }
 
     private fun loadFile() {
         if (!Files.exists(file)) return
@@ -38,14 +39,14 @@ class PassphraseFileSecureStorage(
         val salt = Base64.getDecoder().decode(p.getProperty("salt")); val nonce = Base64.getDecoder().decode(p.getProperty("nonce"))
         val plain = crypt(Cipher.DECRYPT_MODE, salt, nonce, Base64.getDecoder().decode(p.getProperty("data")))
         plain.toString(StandardCharsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.forEach { val i = it.indexOf('|'); if (i > 0) values[decodeKey(it.substring(0, i))] = Base64.getDecoder().decode(it.substring(i + 1)) }
-        plain.fill(0)
+        Wipe.wipe(plain)
     }
 
     private fun persist() {
         val salt = ByteArray(SALT_BYTES).also(random::nextBytes); val nonce = ByteArray(NONCE_BYTES).also(random::nextBytes)
         val body = values.entries.joinToString("\n") { Base64.getEncoder().encodeToString(it.key.toString().toByteArray()) + "|" + Base64.getEncoder().encodeToString(it.value) }.toByteArray(StandardCharsets.UTF_8)
         val encoded = listOf("salt=" + Base64.getEncoder().encodeToString(salt), "nonce=" + Base64.getEncoder().encodeToString(nonce), "data=" + Base64.getEncoder().encodeToString(crypt(Cipher.ENCRYPT_MODE, salt, nonce, body))).joinToString("\n")
-        Files.createDirectories(file.parent); val tmp = file.resolveSibling(".${file.fileName}.tmp"); Files.writeString(tmp, encoded, StandardCharsets.US_ASCII); Files.move(tmp, file, ATOMIC_MOVE, REPLACE_EXISTING); body.fill(0)
+        Files.createDirectories(file.parent); val tmp = file.resolveSibling(".${file.fileName}.tmp"); Files.writeString(tmp, encoded, StandardCharsets.US_ASCII); Files.move(tmp, file, ATOMIC_MOVE, REPLACE_EXISTING); Wipe.wipe(body)
     }
 
     private fun crypt(mode: Int, salt: ByteArray, nonce: ByteArray, input: ByteArray): ByteArray { val spec = PBEKeySpec(password, salt, KDF_ITERATIONS, KEY_BITS); val key = SecretKeySpec(SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded, "AES"); return Cipher.getInstance("AES/GCM/NoPadding").run { init(mode, key, GCMParameterSpec(GCM_TAG_BITS, nonce)); doFinal(input) } }

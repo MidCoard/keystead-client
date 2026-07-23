@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import java.security.SecureRandom
 import java.util.Base64
+import top.focess.keystead.memory.Wipe
 
 object ServerVaultMetadata {
 
@@ -21,7 +22,7 @@ object ServerVaultMetadata {
         return try {
             "$VERSION.${Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)}"
         } finally {
-            bytes.fill(0)
+            Wipe.wipe(bytes)
         }
     }
 

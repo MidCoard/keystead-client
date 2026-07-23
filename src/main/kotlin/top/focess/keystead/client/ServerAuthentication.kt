@@ -6,6 +6,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Clock
 import java.time.Instant
+import top.focess.keystead.memory.Wipe
 
 class KeysteadServerAuthClient(
     baseUrl: String,
@@ -29,8 +30,8 @@ class KeysteadServerAuthClient(
             }
             requireAuthSuccess(response.statusCode())
         } finally {
-            passwordCopy.fill('\u0000')
-            password.fill('\u0000')
+            Wipe.wipe(passwordCopy)
+            Wipe.wipe(password)
         }
     }
 
@@ -49,8 +50,8 @@ class KeysteadServerAuthClient(
             session.persist(tokens)
             return session
         } finally {
-            passwordCopy.fill('\u0000')
-            password.fill('\u0000')
+            Wipe.wipe(passwordCopy)
+            Wipe.wipe(password)
         }
     }
 

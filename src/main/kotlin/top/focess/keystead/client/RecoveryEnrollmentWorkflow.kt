@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import java.util.Base64
 import java.util.UUID
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.recovery.DefaultRecoveryCryptoService
 import top.focess.keystead.recovery.RecoveryCryptoService
 import top.focess.keystead.recovery.RecoveryKitCodec
@@ -49,7 +50,7 @@ class RecoveryEnrollmentWorkflow(
                             wrapped.keyAlgorithm(), Base64.getEncoder().encodeToString(encryptedVaultKey),
                         ),
                     )
-                } finally { encryptedVaultKey.fill(0) }
+                } finally { Wipe.wipe(encryptedVaultKey) }
                 val committed = recovery.commitEnrollment(enrollmentId, generation)
                 // The recovery kit text must be materialized for display; keep it in wipeable
                 // secret memory until this UI boundary.
@@ -60,7 +61,7 @@ class RecoveryEnrollmentWorkflow(
                 }
                 return RecoveryEnrollmentResult(kitText, committed)
             } finally {
-                credential.fill(0); publicKey.fill(0); encryptedPrivate.fill(0)
+                Wipe.wipe(credential); Wipe.wipe(publicKey); Wipe.wipe(encryptedPrivate)
             }
         }
     }

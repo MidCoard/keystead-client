@@ -3,6 +3,7 @@ package top.focess.keystead.client
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.time.Instant
+import top.focess.keystead.memory.Wipe
 
 enum class ServerRecoveryEnrollmentState { PENDING, ACTIVE, SUPERSEDED, CONSUMED }
 
@@ -79,7 +80,7 @@ class RecoveryClient(private val client: KeysteadServerClient) {
                 "POST", listOf("api", "v1", "auth", "recovery", "device-requests"),
                 body = "{\"username\":\"${username.recoveryJson()}\",\"deviceId\":\"${identity.deviceId.recoveryJson()}\",\"proofKeyAlgorithm\":\"${identity.proofKeyAlgorithm.recoveryJson()}\",\"proofPublicKey\":\"${java.util.Base64.getEncoder().encodeToString(proof)}\",\"wrappingKeyAlgorithm\":\"${identity.keyAlgorithm.recoveryJson()}\",\"wrappingPublicKey\":\"${java.util.Base64.getEncoder().encodeToString(wrapping)}\"}",
             )))
-        } finally { proof.fill(0); wrapping.fill(0) }
+        } finally { Wipe.wipe(proof); Wipe.wipe(wrapping) }
     }
 
     fun listDeviceRecoveryRequests(): List<ServerRecoveryDeviceRequest> {
@@ -167,7 +168,7 @@ class RecoveryClient(private val client: KeysteadServerClient) {
                 value.getAsJsonArray("pendingVaultIds").map { it.asString },
                 value.get("replacementKitRequired").asBoolean,
             )
-        } finally { proof.fill(0); wrapping.fill(0) }
+        } finally { Wipe.wipe(proof); Wipe.wipe(wrapping) }
     }
 
     private fun enrollment(body: String): ServerRecoveryEnrollment {

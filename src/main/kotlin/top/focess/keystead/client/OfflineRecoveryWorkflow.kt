@@ -6,6 +6,7 @@ import java.util.Base64
 import java.util.Comparator
 import java.util.UUID
 import top.focess.keystead.memory.SecretBuffer
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.KeyId
 import top.focess.keystead.model.VaultId
 import top.focess.keystead.recovery.DefaultRecoveryCryptoService
@@ -44,7 +45,7 @@ class OfflineRecoveryWorkflow(
                 }
             }
         } finally {
-            kitChars.fill('\u0000')
+            Wipe.wipe(kitChars)
         }
     }
 
@@ -58,7 +59,7 @@ class OfflineRecoveryWorkflow(
         val (challengeId) = recovery.createChallenge(username, kit.enrollmentId(), kit.generation())
             val credential = crypto.accountCredential(kit)
             val credentialText = Base64.getUrlEncoder().withoutPadding().encodeToString(credential)
-            credential.fill(0)
+            Wipe.wipe(credential)
             val session = recovery.verifyKit(challengeId, credentialText)
             val material = recovery.material(session.token)
             check(material.enrollmentId == kit.enrollmentId() && material.generation == kit.generation()) {
@@ -75,28 +76,28 @@ class OfflineRecoveryWorkflow(
                         username, value.vaultId, KeyId(value.vaultKeyId), value.enrollmentId,
                         value.generation, value.keyAlgorithm, encryptedRecoveryKey,
                     )
-                    encryptedRecoveryKey.fill(0)
+                    Wipe.wipe(encryptedRecoveryKey)
                     val temporaryDirectory = transientRoot.resolve(value.vaultId)
                     val service = DefaultVaultService(FileVaultStore(temporaryDirectory))
                     crypto.openVault(service, VaultId(UUID.fromString(value.vaultId)), recoveryPackage, kit, encryptedPrivateKey).use { handle ->
                         val context = LocalVaultSession.vaultKeyPackageContext(value.vaultId, identity.deviceId)
-                        val devicePackage = try { handle.wrapVaultKeyPackageForDevice(devicePublicKey, context) } finally { context.fill(0) }
+                        val devicePackage = try { handle.wrapVaultKeyPackageForDevice(devicePublicKey, context) } finally { Wipe.wipe(context) }
                         val encryptedDeviceKey = devicePackage.encryptedVaultKey()
                         try {
                             packages += RecoveryCompletionVaultPackage(
                                 value.vaultId, devicePackage.vaultKeyId().value(), devicePackage.keyAlgorithm(),
                                 Base64.getEncoder().encodeToString(encryptedDeviceKey),
                             )
-                        } finally { encryptedDeviceKey.fill(0) }
+                        } finally { Wipe.wipe(encryptedDeviceKey) }
                     }
                 }
                 val completion = recovery.complete(session.token, String(newPassword), identity, packages)
                 provisionRecoveredVaults(vaultRoot, identity, packages)
                 return completion
             } finally {
-                newPassword.fill('\u0000')
-                encryptedPrivateKey.fill(0)
-                devicePublicKey.fill(0)
+                Wipe.wipe(newPassword)
+                Wipe.wipe(encryptedPrivateKey)
+                Wipe.wipe(devicePublicKey)
                 deleteTree(transientRoot)
             }
     }
@@ -122,9 +123,9 @@ class OfflineRecoveryWorkflow(
                         privateKey,
                         context,
                     ).close()
-                } finally { encrypted.fill(0); context.fill(0) }
+                } finally { Wipe.wipe(encrypted); Wipe.wipe(context) }
             }
-        } finally { privateKey.fill(0) }
+        } finally { Wipe.wipe(privateKey) }
     }
 
     private fun deleteTree(directory: Path) {

@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import java.time.Clock
 import java.util.Base64
+import top.focess.keystead.memory.Wipe
 
 class DeviceEnrollmentService(
     private val clock: Clock = Clock.systemUTC(),
@@ -58,8 +59,8 @@ class DeviceEnrollmentService(
                 wrappingPublicKey = Base64.getEncoder().encodeToString(wrappingPublicKey),
             )
         } finally {
-            proofPublicKey.fill(0)
-            wrappingPublicKey.fill(0)
+            Wipe.wipe(proofPublicKey)
+            Wipe.wipe(wrappingPublicKey)
         }
     }
 

@@ -6,6 +6,7 @@ import com.sun.jna.Pointer
 import com.sun.jna.ptr.IntByReference
 import com.sun.jna.ptr.PointerByReference
 import java.nio.charset.StandardCharsets
+import top.focess.keystead.memory.Wipe
 
 internal interface MacOsKeychainPort {
     fun save(service: String, account: String, secret: ByteArray)
@@ -72,11 +73,11 @@ class MacOsKeychainSecretStore internal constructor(private val port: MacOsKeych
     override fun availability() = if (isMac()) OsSecretStoreAvailability(OsSecretStoreStatus.AVAILABLE, "macos-keychain-available") else OsSecretStoreAvailability(OsSecretStoreStatus.UNSUPPORTED, "macos-keychain-unsupported")
     override fun save(instanceId: String, secret: ByteArray) {
         val copy = secret.copyOf()
-        try { call("macos-keychain-save") { port.save(SERVICE, instanceId, copy) } } finally { copy.fill(0) }
+        try { call("macos-keychain-save") { port.save(SERVICE, instanceId, copy) } } finally { Wipe.wipe(copy) }
     }
     override fun load(instanceId: String): ByteArray? = call("macos-keychain-load") {
         val loaded = port.load(SERVICE, instanceId) ?: return@call null
-        try { loaded.copyOf() } finally { loaded.fill(0) }
+        try { loaded.copyOf() } finally { Wipe.wipe(loaded) }
     }
     override fun delete(instanceId: String) = call("macos-keychain-delete") { port.delete(SERVICE, instanceId) }
     private fun isMac() = System.getProperty("os.name").lowercase().contains("mac")

@@ -3,6 +3,7 @@ package top.focess.keystead.client
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import top.focess.keystead.crypto.DefaultCryptoService
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.KeyId
 import top.focess.keystead.service.DeviceVaultKeyPackage
 import top.focess.keystead.service.DefaultVaultService
@@ -69,14 +70,14 @@ class VaultRotationWorkflow(
             val context = context(current.vaultId, target)
             val keyPackage = try {
                 prepared.wrapVaultKeyPackageForDevice(publicKey, context)
-            } finally { publicKey.fill(0); context.fill(0) }
+            } finally { Wipe.wipe(publicKey); Wipe.wipe(context) }
             val encrypted = keyPackage.encryptedVaultKey()
             try {
                 current = rotations.upload(
                     current.vaultId, current.generationId, target,
                     keyPackage.vaultKeyId().value(), Base64.getEncoder().encodeToString(encrypted),
                 )
-            } finally { encrypted.fill(0) }
+            } finally { Wipe.wipe(encrypted) }
             if (target.targetType == ServerVaultRotationTargetType.DEVICE &&
                 target.recipientId != null && target.deviceId == identity.deviceId
             ) localPackage = keyPackage

@@ -3,6 +3,7 @@ package top.focess.keystead.client
 import java.time.Instant
 import top.focess.keystead.generator.DefaultTotpCodeGenerator
 import top.focess.keystead.memory.SecretBuffer
+import top.focess.keystead.memory.Wipe
 
 /**
  * Generates the current RFC 6238 TOTP code for an MFA secret on the client.
@@ -40,13 +41,13 @@ internal object MfaTotp {
                 try {
                     String(code)
                 } finally {
-                    code.fill(0.toChar())
+                    Wipe.wipe(code)
                 }
             }
         } catch (_: RuntimeException) {
             null
         } finally {
-            chars.fill(0.toChar())
+            Wipe.wipe(chars)
         }
     }
 

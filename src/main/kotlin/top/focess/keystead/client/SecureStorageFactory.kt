@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import java.nio.file.Path
 import java.security.SecureRandom
+import top.focess.keystead.memory.Wipe
 
 data class SecureStorageDiagnostic(
     val providerId: String,
@@ -54,7 +55,7 @@ class SecureStorageFactory internal constructor(
                 storage.save(key, value)
                 if (!storage.load(key).contentEquals(value)) throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-probe-mismatch")
                 storage.delete(key)
-            } finally { value.fill(0) }
+            } finally { Wipe.wipe(value) }
             SecureStorageSelection.Available(storage, provider.providerId)
         } catch (error: OsSecretStoreException) {
             unavailable(provider.providerId, error.failure, error.diagnosticCode)

@@ -2,6 +2,7 @@ package top.focess.keystead.client
 
 import java.util.Base64
 import top.focess.keystead.crypto.DefaultCryptoService
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.recovery.RecoveryDeviceRequestCodec
 
 class VerifiedDeviceRecoveryWorkflow(client: KeysteadServerClient) {
@@ -16,7 +17,7 @@ class VerifiedDeviceRecoveryWorkflow(client: KeysteadServerClient) {
         vaults: List<LocalVaultSession>,
     ) {
         val canonical = Base64.getUrlDecoder().decode(request.canonicalRequest)
-        val decoded = try { RecoveryDeviceRequestCodec.decode(canonical) } finally { canonical.fill(0) }
+        val decoded = try { RecoveryDeviceRequestCodec.decode(canonical) } finally { Wipe.wipe(canonical) }
         val publicKey = decoded.wrappingPublicKey()
         val packages = mutableListOf<RecoveryCompletionVaultPackage>()
         try {
@@ -25,24 +26,24 @@ class VerifiedDeviceRecoveryWorkflow(client: KeysteadServerClient) {
                     "Replacement device wrapping algorithm is unsupported"
                 }
                 val context = LocalVaultSession.vaultKeyPackageContext(vault.vaultIdValue(), decoded.deviceId())
-                val wrapped = try { vault.wrapCurrentVaultKey(publicKey, context) } finally { context.fill(0) }
+                val wrapped = try { vault.wrapCurrentVaultKey(publicKey, context) } finally { Wipe.wipe(context) }
                 val encrypted = wrapped.encryptedVaultKey()
                 try {
                     packages += RecoveryCompletionVaultPackage(
                         vault.vaultIdValue(), wrapped.vaultKeyId().value(), wrapped.keyAlgorithm(),
                         Base64.getEncoder().encodeToString(encrypted),
                     )
-                } finally { encrypted.fill(0) }
+                } finally { Wipe.wipe(encrypted) }
             }
-        } finally { publicKey.fill(0) }
+        } finally { Wipe.wipe(publicKey) }
         val payload = Base64.getUrlDecoder().decode(request.canonicalRequest)
-        val signature = try { approverIdentity.signRecoveryRequest(payload) } finally { payload.fill(0) }
+        val signature = try { approverIdentity.signRecoveryRequest(payload) } finally { Wipe.wipe(payload) }
         recovery.approveDeviceRecovery(request.requestId, approverIdentity.deviceId, signature, packages)
     }
 
     fun claim(request: ServerRecoveryDeviceRequest, replacementIdentity: LocalDeviceIdentity): ServerRecoverySession {
         val payload = Base64.getUrlDecoder().decode(request.canonicalRequest)
-        val signature = try { replacementIdentity.signRecoveryRequest(payload) } finally { payload.fill(0) }
+        val signature = try { replacementIdentity.signRecoveryRequest(payload) } finally { Wipe.wipe(payload) }
         return recovery.claimDeviceRecovery(request.requestId, signature)
     }
 
@@ -60,7 +61,7 @@ class VerifiedDeviceRecoveryWorkflow(client: KeysteadServerClient) {
                 emptyList(),
             )
         } finally {
-            newPassword.fill('\u0000')
+            Wipe.wipe(newPassword)
         }
     }
 }

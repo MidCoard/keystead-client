@@ -18,6 +18,7 @@ import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import top.focess.keystead.memory.Wipe
 
 class NativeSecureStorage(
     private val file: Path,
@@ -35,12 +36,12 @@ class NativeSecureStorage(
         val existing = secretStore.load(instanceId)
         storageKey =
             when {
-                existing != null -> existing.copyOf().also { existing.fill(0) }
+                existing != null -> existing.copyOf().also { Wipe.wipe(existing) }
                 Files.exists(file) -> throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-key-missing")
                 else -> ByteArray(AES_KEY_BYTES).also { random.nextBytes(it); secretStore.save(instanceId, it.copyOf()) }
             }
         if (storageKey.size != AES_KEY_BYTES) {
-            storageKey.fill(0)
+            Wipe.wipe(storageKey)
             throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-key-invalid")
         }
         if (Files.exists(file)) values.putAll(readFile())
@@ -50,7 +51,7 @@ class NativeSecureStorage(
     override fun save(key: SecureStorageKey, value: ByteArray) {
         requireOpen()
         require(value.size <= SecureStorageCodec.MAX_VALUE_BYTES) { "Secure storage value is too large" }
-        values.put(key, value.copyOf())?.fill(0)
+        Wipe.wipe(values.put(key, value.copyOf()))
         persist()
     }
 
@@ -60,7 +61,7 @@ class NativeSecureStorage(
     override fun delete(key: SecureStorageKey) {
         requireOpen()
         val removed = values.remove(key) ?: return
-        removed.fill(0)
+        Wipe.wipe(removed)
         persist()
     }
 
@@ -90,9 +91,9 @@ class NativeSecureStorage(
     @Synchronized
     override fun close() {
         if (!closed) {
-            values.values.forEach { it.fill(0) }
+            values.values.forEach { Wipe.wipe(it) }
             values.clear()
-            storageKey.fill(0)
+            Wipe.wipe(storageKey)
             closed = true
         }
     }
@@ -121,8 +122,8 @@ class NativeSecureStorage(
         } catch (error: java.io.IOException) {
             throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-file-invalid", error)
         } finally {
-            encoded.fill(0)
-            plaintext?.fill(0)
+            Wipe.wipe(encoded)
+            Wipe.wipe(plaintext)
         }
     }
 
@@ -152,7 +153,7 @@ class NativeSecureStorage(
         } catch (error: GeneralSecurityException) {
             throw OsSecretStoreException(OsSecretStoreFailure.IO_FAILURE, "native-encryption-failed", error)
         } finally {
-            plaintext?.fill(0); ciphertext?.fill(0); encoded?.fill(0)
+            Wipe.wipe(plaintext); Wipe.wipe(ciphertext); Wipe.wipe(encoded)
         }
     }
 

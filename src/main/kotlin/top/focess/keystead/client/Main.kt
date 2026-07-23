@@ -53,6 +53,7 @@ import java.awt.Dimension
 import java.nio.file.Path
 import java.util.UUID
 import kotlinx.coroutines.delay
+import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.SecretType
 
 private val defaultVaultDirectory: String =
@@ -381,7 +382,7 @@ fun KeysteadClientApp() {
                     }
             }
         } finally {
-            passwordChars.fill('\u0000')
+            Wipe.wipe(passwordChars)
             serverPassword = ""
         }
     }
@@ -795,8 +796,8 @@ fun KeysteadClientApp() {
                         status = "Server user created and signed in"
                     }
                 } finally {
-                    registrationPassword.fill('\u0000')
-                    loginPassword.fill('\u0000')
+                    Wipe.wipe(registrationPassword)
+                    Wipe.wipe(loginPassword)
                     serverPassword = ""
                 }
             },
@@ -846,7 +847,7 @@ fun KeysteadClientApp() {
                         status = "Device identity ready"
                     }
                 } finally {
-                    passphraseChars.fill('\u0000')
+                    Wipe.wipe(passphraseChars)
                     devicePassphrase = ""
                 }
             },
@@ -976,7 +977,7 @@ fun KeysteadClientApp() {
                             status = "Device identity moved to OS-user-protected storage"
                         }
                     } finally {
-                        passphraseChars.fill('\u0000')
+                        Wipe.wipe(passphraseChars)
                         devicePassphrase = ""
                     }
                 },

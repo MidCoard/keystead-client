@@ -12,6 +12,7 @@ import java.nio.file.StandardOpenOption.CREATE_NEW
 import java.nio.file.StandardOpenOption.WRITE
 import java.security.MessageDigest
 import java.util.Base64
+import top.focess.keystead.memory.Wipe
 
 internal interface WindowsDpapiPort {
     fun protect(plaintext: ByteArray, entropy: ByteArray): ByteArray
@@ -43,8 +44,8 @@ class WindowsDpapiSecretStore internal constructor(
         val protected = try {
             mapErrors("windows-dpapi-protect") { port.protect(plaintext, entropy) }
         } finally {
-            plaintext.fill(0)
-            entropy.fill(0)
+            Wipe.wipe(plaintext)
+            Wipe.wipe(entropy)
         }
         try {
             Files.createDirectories(directory)
@@ -56,7 +57,7 @@ class WindowsDpapiSecretStore internal constructor(
             } finally { Files.deleteIfExists(temporary) }
         } catch (error: java.io.IOException) {
             throw OsSecretStoreException(OsSecretStoreFailure.IO_FAILURE, "windows-dpapi-write", error)
-        } finally { protected.fill(0) }
+        } finally { Wipe.wipe(protected) }
     }
 
     override fun load(instanceId: String): ByteArray? {
@@ -65,7 +66,7 @@ class WindowsDpapiSecretStore internal constructor(
         if (!Files.exists(target)) return null
         val protected = try { Files.readAllBytes(target) } catch (error: java.io.IOException) { throw OsSecretStoreException(OsSecretStoreFailure.IO_FAILURE, "windows-dpapi-read", error) }
         val entropy = entropy(instanceId)
-        return try { mapErrors("windows-dpapi-unprotect") { port.unprotect(protected, entropy) } } finally { protected.fill(0); entropy.fill(0) }
+        return try { mapErrors("windows-dpapi-unprotect") { port.unprotect(protected, entropy) } } finally { Wipe.wipe(protected); Wipe.wipe(entropy) }
     }
 
     override fun delete(instanceId: String) {
