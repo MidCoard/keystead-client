@@ -42,12 +42,20 @@ class PassphraseFileSecureStorage(
     }
 
     private fun persist() {
-        val salt = ByteArray(16).also(random::nextBytes); val nonce = ByteArray(12).also(random::nextBytes)
+        val salt = ByteArray(SALT_BYTES).also(random::nextBytes); val nonce = ByteArray(NONCE_BYTES).also(random::nextBytes)
         val body = values.entries.joinToString("\n") { Base64.getEncoder().encodeToString(it.key.toString().toByteArray()) + "|" + Base64.getEncoder().encodeToString(it.value) }.toByteArray(StandardCharsets.UTF_8)
         val encoded = listOf("salt=" + Base64.getEncoder().encodeToString(salt), "nonce=" + Base64.getEncoder().encodeToString(nonce), "data=" + Base64.getEncoder().encodeToString(crypt(Cipher.ENCRYPT_MODE, salt, nonce, body))).joinToString("\n")
         Files.createDirectories(file.parent); val tmp = file.resolveSibling(".${file.fileName}.tmp"); Files.writeString(tmp, encoded, StandardCharsets.US_ASCII); Files.move(tmp, file, ATOMIC_MOVE, REPLACE_EXISTING); body.fill(0)
     }
 
-    private fun crypt(mode: Int, salt: ByteArray, nonce: ByteArray, input: ByteArray): ByteArray { val spec = PBEKeySpec(password, salt, 120_000, 256); val key = SecretKeySpec(SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded, "AES"); return Cipher.getInstance("AES/GCM/NoPadding").run { init(mode, key, GCMParameterSpec(128, nonce)); doFinal(input) } }
+    private fun crypt(mode: Int, salt: ByteArray, nonce: ByteArray, input: ByteArray): ByteArray { val spec = PBEKeySpec(password, salt, KDF_ITERATIONS, KEY_BITS); val key = SecretKeySpec(SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded, "AES"); return Cipher.getInstance("AES/GCM/NoPadding").run { init(mode, key, GCMParameterSpec(GCM_TAG_BITS, nonce)); doFinal(input) } }
     private fun decodeKey(encoded: String): SecureStorageKey { val p = String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8).split(":", limit = 3); return SecureStorageKey(p[0], p[1], p[2]) }
+
+    private companion object {
+        const val SALT_BYTES = 16
+        const val NONCE_BYTES = 12
+        const val KDF_ITERATIONS = 120_000
+        const val KEY_BITS = 256
+        const val GCM_TAG_BITS = 128
+    }
 }

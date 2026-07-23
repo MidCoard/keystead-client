@@ -104,9 +104,9 @@ class NativeSecureStorage(
             DataInputStream(ByteArrayInputStream(encoded)).use { data ->
                 val magic = ByteArray(4); data.readFully(magic)
                 if (!magic.contentEquals(MAGIC) || data.readUnsignedByte() != VERSION) corrupt()
-                val nonce = ByteArray(12); data.readFully(nonce)
+                val nonce = ByteArray(GCM_NONCE_BYTES); data.readFully(nonce)
                 val length = data.readInt()
-                if (length !in 16..MAX_CIPHERTEXT || length != data.available()) corrupt()
+                if (length !in GCM_TAG_BYTES..MAX_CIPHERTEXT || length != data.available()) corrupt()
                 val ciphertext = ByteArray(length); data.readFully(ciphertext)
                 val plain = crypt(Cipher.DECRYPT_MODE, nonce, ciphertext)
                 plaintext = plain
@@ -132,7 +132,7 @@ class NativeSecureStorage(
         var encoded: ByteArray? = null
         try {
             plaintext = SecureStorageCodec.encode(values)
-            val nonce = ByteArray(12).also(random::nextBytes)
+            val nonce = ByteArray(GCM_NONCE_BYTES).also(random::nextBytes)
             ciphertext = crypt(Cipher.ENCRYPT_MODE, nonce, plaintext)
             val output = ByteArrayOutputStream()
             DataOutputStream(output).use { data -> data.write(MAGIC); data.writeByte(VERSION); data.write(nonce); data.writeInt(ciphertext.size); data.write(ciphertext) }
@@ -171,6 +171,8 @@ class NativeSecureStorage(
         const val INSTANCE_ID_MAX_LENGTH = 255
         const val AES_KEY_BYTES = 32
         const val GCM_TAG_BITS = 128
+        const val GCM_TAG_BYTES = 16
+        const val GCM_NONCE_BYTES = 12
         val MAGIC = byteArrayOf('K'.code.toByte(), 'S'.code.toByte(), 'S'.code.toByte(), '2'.code.toByte())
         const val VERSION = 1
         const val MAX_CIPHERTEXT = 8 * 1024 * 1024
