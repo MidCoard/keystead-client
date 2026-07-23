@@ -15,11 +15,12 @@ data class CertificateDraft(
 }
 
 object CertificateDraftGenerator {
+    private const val CERTIFICATE_VALIDITY_DAYS = 365L
     private val generator = DefaultCertificateGenerator()
 
     fun generate(commonName: String): CertificateDraft {
         val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
-        val notAfter = now.plus(365, ChronoUnit.DAYS)
+        val notAfter = now.plus(CERTIFICATE_VALIDITY_DAYS, ChronoUnit.DAYS)
         return generator
             .generate(CertificatePolicy(commonName, Date.from(now), Date.from(notAfter)))
             .use { bundle ->

@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets
 internal object SecureStorageCodec {
     private const val MAX_ENTRIES = 4096
     private const val MAX_TEXT_BYTES = 512
-    private const val MAX_VALUE_BYTES = 1024 * 1024
+    internal const val MAX_VALUE_BYTES = 1024 * 1024
 
     fun encode(values: Map<SecureStorageKey, ByteArray>): ByteArray {
         require(values.size <= MAX_ENTRIES) { "Secure storage has too many entries" }

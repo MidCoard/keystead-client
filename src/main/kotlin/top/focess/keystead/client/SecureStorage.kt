@@ -11,6 +11,14 @@ data class SecureStorageKey(val namespace: String, val account: String, val name
     override fun toString(): String = "$namespace:$account:$name"
 }
 
+/**
+ * Secret store backed by a capability-appropriate mechanism.
+ *
+ * Ownership/zeroing contract: [save] copies the supplied value (the caller
+ * retains ownership and may zero its array afterwards); [load] returns a fresh
+ * copy; [delete] zeroes the removed value. Stored secrets are never aliased by
+ * caller-supplied or returned arrays.
+ */
 interface SecureStorage {
     val capability: SecureStorageCapability
     fun save(key: SecureStorageKey, value: ByteArray)

@@ -31,15 +31,15 @@ class NativeSecureStorage(
     private var closed = false
 
     init {
-        require(instanceId.isNotBlank() && instanceId.length <= 255 && instanceId.none(Char::isISOControl))
+        require(instanceId.isNotBlank() && instanceId.length <= INSTANCE_ID_MAX_LENGTH && instanceId.none(Char::isISOControl))
         val existing = secretStore.load(instanceId)
         storageKey =
             when {
                 existing != null -> existing.copyOf().also { existing.fill(0) }
                 Files.exists(file) -> throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-key-missing")
-                else -> ByteArray(32).also { random.nextBytes(it); secretStore.save(instanceId, it.copyOf()) }
+                else -> ByteArray(AES_KEY_BYTES).also { random.nextBytes(it); secretStore.save(instanceId, it.copyOf()) }
             }
-        if (storageKey.size != 32) {
+        if (storageKey.size != AES_KEY_BYTES) {
             storageKey.fill(0)
             throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-key-invalid")
         }
@@ -49,7 +49,7 @@ class NativeSecureStorage(
     @Synchronized
     override fun save(key: SecureStorageKey, value: ByteArray) {
         requireOpen()
-        require(value.size <= 1024 * 1024) { "Secure storage value is too large" }
+        require(value.size <= SecureStorageCodec.MAX_VALUE_BYTES) { "Secure storage value is too large" }
         values.put(key, value.copyOf())?.fill(0)
         persist()
     }
@@ -159,7 +159,7 @@ class NativeSecureStorage(
     @Throws(GeneralSecurityException::class)
     private fun crypt(mode: Int, nonce: ByteArray, input: ByteArray): ByteArray =
         Cipher.getInstance("AES/GCM/NoPadding").run {
-            init(mode, SecretKeySpec(storageKey, "AES"), GCMParameterSpec(128, nonce))
+            init(mode, SecretKeySpec(storageKey, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
             updateAAD("keystead-native-storage|v1|$instanceId".toByteArray(StandardCharsets.UTF_8))
             doFinal(input)
         }
@@ -168,6 +168,9 @@ class NativeSecureStorage(
     private fun corrupt(): Nothing = throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-file-invalid")
 
     private companion object {
+        const val INSTANCE_ID_MAX_LENGTH = 255
+        const val AES_KEY_BYTES = 32
+        const val GCM_TAG_BITS = 128
         val MAGIC = byteArrayOf('K'.code.toByte(), 'S'.code.toByte(), 'S'.code.toByte(), '2'.code.toByte())
         const val VERSION = 1
         const val MAX_CIPHERTEXT = 8 * 1024 * 1024
