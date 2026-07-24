@@ -15,9 +15,3 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "keystead-client"
-
-includeBuild("../keystead") {
-    dependencySubstitution {
-        substitute(module("top.focess:keystead-core")).using(project(":keystead-core"))
-    }
-}
