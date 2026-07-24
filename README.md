@@ -1,14 +1,30 @@
 # Keystead Client
 
-Keystead Client is the desktop application for creating, opening, and using an
-encrypted Keystead vault. It keeps encryption on your computer and can connect
-to a self-hosted Keystead Server to synchronize encrypted records across
-verified devices.
+Keystead Client is the desktop password and secret manager in the Keystead
+product family. It creates and opens encrypted vaults on your computer, keeps
+encryption and decryption on the client, and optionally connects to a
+self-hosted Keystead Server for encrypted multi-device sync, sharing, key
+rotation, and recovery.
 
-The current application targets Kotlin/JVM Compose Desktop. Keystead Core and
-Keystead Server are independent repositories; the client uses their vault and
-sync contracts but remains responsible for every operation that exposes
-plaintext.
+The application is built with Kotlin/JVM and Compose Desktop. A local vault
+works without an account or server. When a server is connected, the client
+still owns every operation involving plaintext, vault keys, recovery private
+keys, and device private keys.
+
+## The Keystead ecosystem
+
+Keystead is delivered as three independent repositories:
+
+| Project | What it provides |
+| --- | --- |
+| **[Keystead Client](https://github.com/MidCoard/keystead-client)** | This desktop application and its user-facing vault, device, synchronization, collaboration, backup, and recovery workflows |
+| **[Keystead Core](https://github.com/MidCoard/keystead)** | The Java cryptography, typed-secret, local-persistence, encrypted-protocol, native-memory, and process-hardening foundation used by the client |
+| **[Keystead Server](https://github.com/MidCoard/keystead-server)** | The optional self-hosted account and zero-knowledge synchronization service |
+
+Keystead's OS-native security is also shared across these layers. Core protects
+owned key material in fail-closed locked native memory by default. Client
+protects persistent device identity material with the signed-in user's Windows
+DPAPI, macOS Keychain, or Linux Secret Service facility.
 
 ## What you can do
 
@@ -45,6 +61,9 @@ state, not the plaintext secret or raw vault key.
 
 The application also treats the unlocked desktop session as a sensitive state:
 
+- vault keys and `SecretBuffer` values use Keystead Core's fail-closed native
+  locked-memory provider by default; the packaged launcher grants the native
+  access required by Core;
 - closing or locking the vault closes the local vault handle;
 - revealed values expire after a short timeout;
 - selecting, editing, deleting, or locking clears reveal state; a pulled
@@ -65,7 +84,9 @@ The application also treats the unlocked desktop session as a sensitive state:
 Compose text fields use immutable JVM strings while visible. Keystead bounds
 their lifetime but cannot guarantee perfect erasure from managed memory. Any
 malware controlling the desktop process while the vault is open can potentially
-capture displayed or copied secrets.
+capture displayed, decrypted, or copied secrets. Native memory protection
+reduces paging and crash-dump exposure for Core-owned buffers; it cannot make a
+live compromised process trustworthy.
 
 ## Typical workflow
 
@@ -230,7 +251,9 @@ memory-only mode deliberately discards the identity at exit.
 
 ## Run the desktop app
 
-Requires JDK 21.
+Requires JDK 25. The Gradle toolchain selects Java 25, and the application and
+test launchers grant `--enable-native-access=ALL-UNNAMED` so Keystead Core can
+establish its default native secret-memory protection.
 
 ```bash
 ./gradlew run
@@ -245,27 +268,44 @@ On Windows:
 The default UI is configured for a local server at `http://localhost:8080`, but
 the server is optional for local-only vault use.
 
+The Compose build is configured to produce MSI, DMG, and DEB distributions on
+their corresponding desktop platforms.
+
 ## Verification
 
 ```bash
 ./gradlew test --no-daemon --rerun-tasks
 ```
 
-The current complete client suite contains 160 tests covering local sessions,
-typed forms, bearer authentication, device enrollment, sync pagination and
-tombstones, backup flows, reveal/clipboard lifecycle, secure storage, response
-validation, and redaction behavior.
+The client suite covers local sessions, typed forms and generators, bearer
+authentication, device enrollment, sync pagination and tombstones,
+collaboration and staged rotation, both recovery paths, backup flows,
+reveal/clipboard lifecycle, OS-native secure storage, response validation, and
+redaction behavior.
 
-## Current scope
+## Security and platform limits
 
-- Desktop JVM only; there are no Android or iOS applications.
-- No browser extension, browser autofill, desktop auto-type, or passkey storage.
-- No biometric-gated unlock or passkey/WebAuthn login.
-- No email-alias service, breach monitoring, or attachment workflow.
-- Collaboration is whole-vault; there are no per-record ACLs, public links, or
-  asynchronous emergency-access grants.
-- Native packages are built per desktop platform, and Linux native protection
-  requires a working Secret Service session.
+Keystead Client currently targets desktop JVM environments. It does not yet
+provide an Android or iOS app, browser extension, browser autofill, desktop
+auto-type, passkey storage, or passkey/WebAuthn login.
+
+OS-native device identity storage is implemented, but it is user-bound rather
+than biometric-gated: Keystead does not claim Windows Hello, Touch ID, or Linux
+biometric verification before every key release. Linux native storage requires
+a working, unlocked Secret Service session. When a native provider is missing,
+locked, denied, or corrupt, Keystead reports the condition and requires the
+user to choose a passphrase-protected file or non-persistent memory mode; it
+does not silently weaken storage.
+
+Collaboration is whole-vault. Membership roles and per-device key packages
+control server access, but there are no per-record ACLs or public share links.
+Removing a member and completing the required rotation prevents access to
+future key generations; it cannot erase plaintext, exports, screenshots, or
+ciphertext the member already retained.
+
+Recovery is deliberately possession based. If every offline recovery kit,
+eligible verified device, usable local header, and backup is lost, neither the
+client nor server can manufacture the missing vault key.
 
 Keystead Client is currently intended for technical users evaluating a
 local-first, self-hostable encrypted vault and for self-hosters testing the
