@@ -88,9 +88,11 @@ fun main() = application {
                 )
             onDispose {}
         }
-        MaterialTheme {
-            Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
-                KeysteadClientApp()
+        top.focess.keystead.client.ui.KeysteadTheme {
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
+                    KeysteadClientApp()
+                }
             }
         }
     }
