@@ -843,7 +843,10 @@ fun KeysteadClientApp() {
             },
             conflictAssessment = conflictAssessment,
             onPullAndRetry = { performPullAndRetry() },
-            onDismissConflict = { conflictAssessment = null },
+            onDismissConflict = {
+                conflictAssessment = null
+                status = "Conflict dismissed"
+            },
             onExportBackup = { performExportBackup() },
             onRestoreBackup = { performRestoreBackup() },
             )
@@ -1062,6 +1065,7 @@ fun KeysteadClientApp() {
                 filterCategory = ""
                 filterProvider = ""
                 filterSoftware = ""
+                status = "Filters cleared"
             },
             groupingMode = groupingMode,
             onGroupingChange = { groupingMode = it },
@@ -1107,11 +1111,20 @@ fun KeysteadClientApp() {
                 }
             },
             onCopy = {
-                revealedValue.takeIf { it.isNotEmpty() }?.let { clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now()) }
+                revealedValue.takeIf { it.isNotEmpty() }?.let {
+                    clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
+                    status = "Copied to clipboard"
+                }
             },
-            onToggleTotpCode = { showTotpCode = !showTotpCode },
+            onToggleTotpCode = {
+                showTotpCode = !showTotpCode
+                status = if (showTotpCode) "Authentication code shown" else "Authentication code hidden"
+            },
             onCopyTotpCode = {
-                totpCode.takeIf { it.isNotEmpty() }?.let { clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now()) }
+                totpCode.takeIf { it.isNotEmpty() }?.let {
+                    clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
+                    status = "Copied code to clipboard"
+                }
             },
             onDelete = {
                 val selected = selectedSecret ?: return@InspectorPanel
@@ -1152,7 +1165,10 @@ fun KeysteadClientApp() {
         top.focess.keystead.client.ui.KeysteadAppShell(
             vaultOpen = session != null,
             destination = currentDestination,
-            onDestinationChange = { currentDestination = it },
+            onDestinationChange = {
+                currentDestination = it
+                if (it != top.focess.keystead.client.ui.KeysteadDestination.SECRETS) inspectorSheetOpen = false
+            },
             status = status,
             layoutMode = layoutMode,
             inspectorSheetVisible = inspectorSheetOpen && selectedSecret != null,

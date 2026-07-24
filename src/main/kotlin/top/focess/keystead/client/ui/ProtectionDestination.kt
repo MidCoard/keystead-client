@@ -24,7 +24,7 @@ import top.focess.keystead.client.ServerRecoveryDeviceRequest
 import top.focess.keystead.client.ServerVaultKeyLifecycleState
 
 @Composable
-internal fun LifecyclePanel(
+fun LifecyclePanel(
     authenticated: Boolean,
     vaultOpen: Boolean,
     identityLoaded: Boolean,

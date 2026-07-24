@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
-
 package top.focess.keystead.client.ui
 
 import androidx.compose.foundation.background
@@ -163,6 +161,7 @@ private fun railItemColors() =
         disabledTextColor = RailContentMuted.copy(alpha = 0.38f),
     )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SecretsArea(
     layoutMode: KeysteadLayoutMode,
