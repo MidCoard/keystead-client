@@ -55,6 +55,7 @@ import java.util.UUID
 import kotlinx.coroutines.delay
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.client.ui.AddSecretPanel
+import top.focess.keystead.client.ui.InspectorPanel
 import top.focess.keystead.client.ui.LifecyclePanel
 import top.focess.keystead.client.ui.SecretListPanel
 import top.focess.keystead.client.ui.SyncPanel
@@ -1409,121 +1410,12 @@ private fun WorkspaceHeader(status: String, recordCount: Int) {
 }
 
 @Composable
-private fun InspectorPanel(
-    selectedSecret: SecretListItem?,
-    revealedValue: String,
-    showTotpCode: Boolean,
-    totpCode: String,
-    totpSecondsRemaining: Int,
-    onReveal: () -> Unit,
-    onCopy: () -> Unit,
-    onToggleTotpCode: () -> Unit,
-    onCopyTotpCode: () -> Unit,
-    onDelete: () -> Unit,
-    onEdit: () -> Unit,
-    modifier: Modifier,
-) {
-    PanelCard(modifier = modifier.fillMaxHeight()) {
-        SectionTitle("Selected secret")
-        if (selectedSecret == null) {
-            EmptyInspector()
-            return@PanelCard
-        }
-        val type = SecretType.valueOf(selectedSecret.type)
-        val revealLabel =
-            if (type == SecretType.LOGIN_PASSWORD) "Password"
-            else SecretFormModel.specFor(type).fields
-                .first { it.name == SecretFormModel.specFor(type).revealFieldName }
-                .label
-        Text(selectedSecret.title, style = MaterialTheme.typography.h5, color = Ink, fontWeight = FontWeight.Bold)
-        Text(typeLabel(selectedSecret.type), color = Blue, fontWeight = FontWeight.SemiBold)
-        Text(selectedSecret.id, style = MaterialTheme.typography.caption, color = Muted)
-        if (selectedSecret.category != null ||
-            selectedSecret.provider != null ||
-            selectedSecret.software != null ||
-            selectedSecret.account != null
-        ) {
-            Text(
-                listOfNotNull(
-                    selectedSecret.category,
-                    selectedSecret.provider,
-                    selectedSecret.software,
-                    selectedSecret.account,
-                )
-                    .joinToString(" / "),
-                color = Muted,
-            )
-        }
-        if (type == SecretType.MFA_SECRET) {
-            SectionTitle("Current code")
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    if (showTotpCode) totpCode.ifEmpty { "…" } else "••••••",
-                    style = MaterialTheme.typography.h5,
-                    fontFamily = FontFamily.Monospace,
-                    color = Ink,
-                    modifier =
-                        Modifier.semantics {
-                            contentDescription =
-                                if (showTotpCode) "Authentication code shown" else "Authentication code hidden"
-                        },
-                )
-                Text(
-                    "${totpSecondsRemaining}s",
-                    color = if (showTotpCode && totpSecondsRemaining <= 5) Amber else Muted,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onToggleTotpCode, modifier = Modifier.weight(1f)) {
-                    Text(if (showTotpCode) "Hide code" else "Show code")
-                }
-                OutlinedButton(
-                    onClick = onCopyTotpCode,
-                    enabled = showTotpCode && totpCode.isNotEmpty(),
-                    modifier = Modifier.weight(1f),
-                ) { Text("Copy code") }
-            }
-        }
-        OutlinedTextField(
-            value = revealedValue,
-            onValueChange = {},
-            label = { Text(revealLabel) },
-            readOnly = true,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onReveal, modifier = Modifier.weight(1f)) { Text("Reveal") }
-            OutlinedButton(onClick = onCopy, enabled = revealedValue.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Copy") }
-            OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("Edit") }
-            OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) { Text("Delete") }
-        }
-    }
-}
-
-@Composable
 private fun PanelCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Card(modifier = modifier, backgroundColor = Panel, elevation = 0.dp, border = BorderStroke(1.dp, Border)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
 }
 
-
-@Composable
-private fun EmptyInspector() {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("No secret selected", color = Ink, fontWeight = FontWeight.SemiBold)
-        Text("Select a saved secret.", color = Muted)
-    }
-}
 
 @Composable
 private fun StatePill(value: String, color: Color) {
@@ -1564,19 +1456,4 @@ private fun StepTitle(step: String, value: String) {
 private fun RailTextField(value: String, onValueChange: (String) -> Unit, enabled: Boolean) {
     OutlinedTextField(value = value, onValueChange = onValueChange, enabled = enabled, singleLine = true, modifier = Modifier.fillMaxWidth())
 }
-
-private fun typeLabel(type: String): String =
-    SecretFormModel.specForOrNull(SecretType.valueOf(type))?.label ?: "Login"
-
-private fun shortTypeLabel(type: String): String =
-    when (SecretType.valueOf(type)) {
-        SecretType.LOGIN_PASSWORD -> "Login"
-        SecretType.SSH_KEY -> "SSH"
-        SecretType.API_TOKEN -> "API"
-        SecretType.GPG_KEY -> "GPG"
-        SecretType.MFA_SECRET -> "MFA"
-        SecretType.CERTIFICATE -> "Cert"
-        SecretType.GENERIC_SECRET -> "Generic"
-        SecretType.SECURE_NOTE -> "Note"
-    }
 

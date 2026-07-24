@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -45,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -387,5 +391,159 @@ private fun ExpiryReminderBanner(expiredCount: Int, dueSoonCount: Int) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+    }
+}
+
+@Composable
+fun InspectorPanel(
+    selectedSecret: SecretListItem?,
+    revealedValue: String,
+    showTotpCode: Boolean,
+    totpCode: String,
+    totpSecondsRemaining: Int,
+    onReveal: () -> Unit,
+    onCopy: () -> Unit,
+    onToggleTotpCode: () -> Unit,
+    onCopyTotpCode: () -> Unit,
+    onDelete: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    DestinationCard(modifier = modifier.fillMaxHeight()) {
+        SectionHeader("Selected secret")
+        if (selectedSecret == null) {
+            EmptyInspector()
+            return@DestinationCard
+        }
+        val type = SecretType.valueOf(selectedSecret.type)
+        val revealLabel =
+            if (type == SecretType.LOGIN_PASSWORD) "Password"
+            else SecretFormModel.specFor(type).fields
+                .first { it.name == SecretFormModel.specFor(type).revealFieldName }
+                .label
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            TypeBadge(shortTypeLabel(selectedSecret.type))
+            Text(
+                typeLabel(selectedSecret.type),
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Text(
+            selectedSecret.title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            selectedSecret.id,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (selectedSecret.category != null ||
+            selectedSecret.provider != null ||
+            selectedSecret.software != null ||
+            selectedSecret.account != null
+        ) {
+            Text(
+                listOfNotNull(
+                    selectedSecret.category,
+                    selectedSecret.provider,
+                    selectedSecret.software,
+                    selectedSecret.account,
+                )
+                    .joinToString(" / "),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (type == SecretType.MFA_SECRET) {
+            SectionHeader("Current code")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    if (showTotpCode) totpCode.ifEmpty { "…" } else "••••••",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier =
+                        Modifier.semantics {
+                            contentDescription =
+                                if (showTotpCode) "Authentication code shown" else "Authentication code hidden"
+                        },
+                )
+                Text(
+                    "${totpSecondsRemaining}s",
+                    color =
+                        if (showTotpCode && totpSecondsRemaining <= 5) {
+                            MaterialTheme.colorScheme.tertiary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onToggleTotpCode, modifier = Modifier.weight(1f)) {
+                    Text(if (showTotpCode) "Hide code" else "Show code")
+                }
+                OutlinedButton(
+                    onClick = onCopyTotpCode,
+                    enabled = showTotpCode && totpCode.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Copy code") }
+            }
+        }
+        OutlinedTextField(
+            value = revealedValue,
+            onValueChange = {},
+            label = { Text(revealLabel) },
+            readOnly = true,
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onReveal, modifier = Modifier.weight(1f)) { Text("Reveal") }
+            OutlinedButton(
+                onClick = onCopy,
+                enabled = revealedValue.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) { Text("Copy") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("Edit") }
+            TextButton(
+                onClick = onDelete,
+                modifier = Modifier.weight(1f),
+                colors =
+                    ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+            ) { Text("Delete") }
+        }
+    }
+}
+
+@Composable
+private fun EmptyInspector() {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            KeyIcon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(32.dp),
+        )
+        Text("No secret selected", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+        Text("Select a secret from the list.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
