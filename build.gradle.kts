@@ -16,7 +16,6 @@ kotlin {
 dependencies {
     implementation("top.focess:keystead-core:0.2.0")
     implementation(compose.desktop.currentOs)
-    implementation("org.jetbrains.compose.material:material:1.10.0")
     implementation("org.jetbrains.compose.material3:material3:1.9.0")
     implementation("org.jetbrains.compose.material:material-icons-core:1.7.3")
     implementation("com.google.code.gson:gson:2.13.2")

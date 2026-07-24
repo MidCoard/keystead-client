@@ -1,35 +1,7 @@
 package top.focess.keystead.client
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
-import androidx.compose.material.Button
-import androidx.compose.material.Card
-import androidx.compose.material.Divider
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.OutlinedButton
-import androidx.compose.material.OutlinedTextField
-import androidx.compose.material.Surface
-import androidx.compose.material.Text
-import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,14 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -70,16 +35,6 @@ private val defaultClientDirectory: Path =
 private const val defaultVaultId = "50000000-0000-0000-0000-000000000001"
 private const val desktopStorageInstance = "keystead-desktop"
 
-private val Ink = Color(0xFF17202A)
-private val Muted = Color(0xFF6B7280)
-private val Canvas = Color(0xFFF3F5F2)
-private val Panel = Color(0xFFFFFFFF)
-private val Rail = Color(0xFF101820)
-private val Mint = Color(0xFF2CB67D)
-private val Blue = Color(0xFF3D5AFE)
-private val Amber = Color(0xFFE6A700)
-private val Border = Color(0xFFD7DDE5)
-
 fun main() = application {
     val windowState =
         rememberWindowState(
@@ -96,10 +51,11 @@ fun main() = application {
             onDispose {}
         }
         top.focess.keystead.client.ui.KeysteadTheme {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
-                    KeysteadClientApp()
-                }
+            androidx.compose.material3.Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = androidx.compose.material3.MaterialTheme.colorScheme.background,
+            ) {
+                KeysteadClientApp()
             }
         }
     }
@@ -159,6 +115,10 @@ fun KeysteadClientApp() {
     var recoveryKit by remember { mutableStateOf("") }
     var replacementRequest by remember { mutableStateOf<ServerRecoveryDeviceRequest?>(null) }
     var status by remember { mutableStateOf("Vault locked") }
+    var currentDestination by remember {
+        mutableStateOf(top.focess.keystead.client.ui.KeysteadDestination.SECRETS)
+    }
+    var inspectorSheetOpen by remember { mutableStateOf(false) }
 
     fun clearSecretEditor() {
         title = ""
@@ -468,53 +428,6 @@ fun KeysteadClientApp() {
     val visibleSecrets = SecretListFilter.apply(secrets, secretListQuery)
     val selectedSecret = secrets.firstOrNull { it.id == selectedSecretId }
 
-    val vaultPanel: @Composable (Modifier, Boolean) -> Unit = { modifier, compact ->
-        VaultAccessPanel(
-            isOpen = session != null,
-            vaultDirectory = vaultDirectory,
-            vaultId = vaultId,
-            masterPassword = masterPassword,
-            compact = compact,
-            onVaultDirectoryChange = { vaultDirectory = it },
-            onVaultIdChange = { vaultId = it },
-            onMasterPasswordChange = { masterPassword = it },
-            onOpen = {
-                runAction {
-                    val opened =
-                        LocalVaultSession.openOrCreate(
-                            Path.of(vaultDirectory),
-                            UUID.fromString(vaultId),
-                            masterPassword.toCharArray(),
-                        )
-                    session?.close()
-                    session = opened
-                    masterPassword = ""
-                    selectedSecretId = null
-                    revealLifecycle.clear()
-                    revealedValue = ""
-                    clearSecretEditor()
-                    status = "Vault open"
-                    refresh(opened)
-                }
-            },
-            onClose = {
-                session?.close()
-                session = null
-                secrets = emptyList()
-                selectedSecretId = null
-                revealLifecycle.clear()
-                revealedValue = ""
-                clipboardLifecycle.dispose(java.time.Instant.now(), clipboardTicket)
-                clipboardTicket = null
-                clearSecretEditor()
-                masterPassword = ""
-                serverPassword = ""
-                unloadDeviceIdentity()
-                status = "Vault locked"
-            },
-            modifier = modifier,
-        )
-    }
     val addPanel: @Composable () -> Unit = {
         AddSecretPanel(
             enabled = session != null,
@@ -688,8 +601,7 @@ fun KeysteadClientApp() {
         )
     }
     val syncPanel: @Composable () -> Unit = {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            SyncPanel(
+        SyncPanel(
             vaultOpen = session != null,
             authenticated = serverAuthSession != null,
             serverUrl = serverUrl,
@@ -935,7 +847,9 @@ fun KeysteadClientApp() {
             onExportBackup = { performExportBackup() },
             onRestoreBackup = { performRestoreBackup() },
             )
-            LifecyclePanel(
+    }
+    val protectionPanel: @Composable () -> Unit = {
+        LifecyclePanel(
                 authenticated = serverAuthSession != null,
                 vaultOpen = session != null,
                 identityLoaded = deviceIdentity != null,
@@ -1130,8 +1044,7 @@ fun KeysteadClientApp() {
                         status = "Account recovered; ${completion.recoveredVaultIds.size} vault packages are ready"
                     }
                 },
-            )
-        }
+        )
     }
     val listPanel: @Composable (Modifier) -> Unit = { modifier ->
         SecretListPanel(
@@ -1162,6 +1075,7 @@ fun KeysteadClientApp() {
                 selectedSecretId = it
                 revealedValue = ""
                 totpCode = ""
+                inspectorSheetOpen = true
             },
             modifier = modifier,
         )
@@ -1226,266 +1140,97 @@ fun KeysteadClientApp() {
                     structuredFields = snapshot.fields
                     editingSecretId = snapshot.id
                     status = "Loaded secret for edit"
+                    currentDestination = top.focess.keystead.client.ui.KeysteadDestination.ADD
                 }
             },
             modifier = modifier,
         )
     }
 
-    if (session == null) {
-        Box(modifier = Modifier.fillMaxSize().background(Canvas)) {
-            top.focess.keystead.client.ui.UnlockScreen(
-                vaultDirectory = vaultDirectory,
-                vaultId = vaultId,
-                masterPassword = masterPassword,
-                onVaultDirectoryChange = { vaultDirectory = it },
-                onVaultIdChange = { vaultId = it },
-                onMasterPasswordChange = { masterPassword = it },
-                onOpen = {
-                    runAction {
-                        val opened =
-                            LocalVaultSession.openOrCreate(
-                                Path.of(vaultDirectory),
-                                UUID.fromString(vaultId),
-                                masterPassword.toCharArray(),
-                            )
-                        session?.close()
-                        session = opened
-                        masterPassword = ""
-                        selectedSecretId = null
-                        revealLifecycle.clear()
-                        revealedValue = ""
-                        clearSecretEditor()
-                        status = "Vault open"
-                        refresh(opened)
-                    }
-                },
-            )
-        }
-    } else {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Canvas)) {
-            when (KeysteadWindowMetrics.modeForWidth(maxWidth.value)) {
-                KeysteadLayoutMode.WIDE ->
-                    WideWorkspace(
-                        vaultPanel = vaultPanel,
-                        addPanel = addPanel,
-                        syncPanel = syncPanel,
-                        listPanel = listPanel,
-                        inspectorPanel = inspectorPanel,
-                        status = status,
-                        recordCount = secrets.size,
-                    )
-                KeysteadLayoutMode.COMPACT ->
-                    CompactWorkspace(
-                        vaultPanel = vaultPanel,
-                        addPanel = addPanel,
-                        syncPanel = syncPanel,
-                        listPanel = listPanel,
-                        inspectorPanel = inspectorPanel,
-                        status = status,
-                        recordCount = secrets.size,
-                    )
-            }
-        }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val layoutMode = KeysteadWindowMetrics.modeForWidth(maxWidth.value)
+        top.focess.keystead.client.ui.KeysteadAppShell(
+            vaultOpen = session != null,
+            destination = currentDestination,
+            onDestinationChange = { currentDestination = it },
+            status = status,
+            layoutMode = layoutMode,
+            inspectorSheetVisible = inspectorSheetOpen && selectedSecret != null,
+            onDismissInspectorSheet = { inspectorSheetOpen = false },
+            onLockVault = {
+                session?.close()
+                session = null
+                secrets = emptyList()
+                selectedSecretId = null
+                revealLifecycle.clear()
+                revealedValue = ""
+                clipboardLifecycle.dispose(java.time.Instant.now(), clipboardTicket)
+                clipboardTicket = null
+                clearSecretEditor()
+                masterPassword = ""
+                serverPassword = ""
+                unloadDeviceIdentity()
+                currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
+                inspectorSheetOpen = false
+                status = "Vault locked"
+            },
+            secretsContent = { modifier -> listPanel(modifier) },
+            inspectorContent = { modifier -> inspectorPanel(modifier) },
+            addContent = { addPanel() },
+            syncContent = { syncPanel() },
+            protectionContent = { protectionPanel() },
+            unlockContent = {
+                top.focess.keystead.client.ui.UnlockScreen(
+                    vaultDirectory = vaultDirectory,
+                    vaultId = vaultId,
+                    masterPassword = masterPassword,
+                    onVaultDirectoryChange = { vaultDirectory = it },
+                    onVaultIdChange = { vaultId = it },
+                    onMasterPasswordChange = { masterPassword = it },
+                    onOpen = {
+                        runAction {
+                            val opened =
+                                LocalVaultSession.openOrCreate(
+                                    Path.of(vaultDirectory),
+                                    UUID.fromString(vaultId),
+                                    masterPassword.toCharArray(),
+                                )
+                            session?.close()
+                            session = opened
+                            masterPassword = ""
+                            selectedSecretId = null
+                            revealLifecycle.clear()
+                            revealedValue = ""
+                            clearSecretEditor()
+                            status = "Vault open"
+                            refresh(opened)
+                        }
+                    },
+                )
+            },
+        )
     }
     val pendingDestructive = destructiveGate.pending
     if (pendingDestructive != null) {
-        AlertDialog(
+        androidx.compose.material3.AlertDialog(
             onDismissRequest = { destructiveGate.cancel() },
-            title = { Text(pendingDestructive.title) },
-            text = { Text(pendingDestructive.message) },
+            title = { androidx.compose.material3.Text(pendingDestructive.title) },
+            text = { androidx.compose.material3.Text(pendingDestructive.message) },
             confirmButton = {
-                TextButton(onClick = {
+                androidx.compose.material3.TextButton(onClick = {
                     when (val confirmed = destructiveGate.confirm()) {
                         is DestructiveConfirmation.DeleteSecret -> performDeleteSecret(confirmed.secretId)
                         DestructiveConfirmation.RevokeDevice -> performRevokeDevice()
                         null -> {}
                     }
-                }) { Text("Confirm") }
+                }) { androidx.compose.material3.Text("Confirm") }
             },
             dismissButton = {
-                TextButton(onClick = { destructiveGate.cancel() }) { Text("Cancel") }
+                androidx.compose.material3.TextButton(onClick = { destructiveGate.cancel() }) {
+                    androidx.compose.material3.Text("Cancel")
+                }
             },
         )
     }
-}
-
-@Composable
-private fun WideWorkspace(
-    vaultPanel: @Composable (Modifier, Boolean) -> Unit,
-    addPanel: @Composable () -> Unit,
-    syncPanel: @Composable () -> Unit,
-    listPanel: @Composable (Modifier) -> Unit,
-    inspectorPanel: @Composable (Modifier) -> Unit,
-    status: String,
-    recordCount: Int,
-) {
-    Row(modifier = Modifier.fillMaxSize()) {
-        vaultPanel(Modifier.width(312.dp).fillMaxHeight(), false)
-        Column(
-            modifier = Modifier.weight(1f).fillMaxHeight().padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            WorkspaceHeader(status = status, recordCount = recordCount)
-            Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Column(modifier = Modifier.weight(1.05f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    addPanel()
-                    syncPanel()
-                    listPanel(Modifier.weight(1f))
-                }
-                inspectorPanel(Modifier.weight(0.85f).fillMaxHeight())
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompactWorkspace(
-    vaultPanel: @Composable (Modifier, Boolean) -> Unit,
-    addPanel: @Composable () -> Unit,
-    syncPanel: @Composable () -> Unit,
-    listPanel: @Composable (Modifier) -> Unit,
-    inspectorPanel: @Composable (Modifier) -> Unit,
-    status: String,
-    recordCount: Int,
-) {
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        vaultPanel(Modifier.fillMaxWidth(), true)
-        WorkspaceHeader(status = status, recordCount = recordCount)
-        addPanel()
-        syncPanel()
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-            listPanel(Modifier.weight(1f).heightIn(min = 260.dp, max = 420.dp))
-            inspectorPanel(Modifier.weight(1f).heightIn(min = 260.dp))
-        }
-    }
-}
-
-@Composable
-private fun VaultAccessPanel(
-    isOpen: Boolean,
-    vaultDirectory: String,
-    vaultId: String,
-    masterPassword: String,
-    compact: Boolean,
-    onVaultDirectoryChange: (String) -> Unit,
-    onVaultIdChange: (String) -> Unit,
-    onMasterPasswordChange: (String) -> Unit,
-    onOpen: () -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier,
-) {
-    Column(
-        modifier = modifier.background(Rail).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Column {
-            Text("Keystead", style = MaterialTheme.typography.h4, color = Color.White, fontWeight = FontWeight.Bold)
-            Text("1 Vault access", color = Color(0xFFB7C2CC), style = MaterialTheme.typography.body2)
-        }
-        StatePill(if (isOpen) "open" else "locked", if (isOpen) Mint else Amber)
-        Divider(color = Color(0xFF2A3642))
-        FieldLabel("Vault folder")
-        RailTextField(vaultDirectory, onVaultDirectoryChange, !isOpen)
-        FieldLabel("Vault ID")
-        RailTextField(vaultId, onVaultIdChange, !isOpen)
-        FieldLabel("Master password")
-        OutlinedTextField(
-            value = masterPassword,
-            onValueChange = onMasterPasswordChange,
-            enabled = !isOpen,
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (compact) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                if (isOpen) {
-                    OutlinedButton(onClick = onClose, modifier = Modifier.weight(1f)) { Text("Close vault") }
-                } else {
-                    Button(onClick = onOpen, enabled = masterPassword.isNotBlank(), modifier = Modifier.weight(1f)) {
-                        Text("Open or create vault")
-                    }
-                }
-                Text("Local mode", color = Color(0xFF93A1AF), style = MaterialTheme.typography.caption, modifier = Modifier.align(Alignment.CenterVertically))
-            }
-        } else {
-            if (isOpen) {
-                OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Close vault") }
-            } else {
-                Button(onClick = onOpen, enabled = masterPassword.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                    Text("Open or create vault")
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Text("Local mode", color = Color(0xFF93A1AF), style = MaterialTheme.typography.caption)
-        }
-    }
-}
-
-@Composable
-private fun WorkspaceHeader(status: String, recordCount: Int) {
-    Card(backgroundColor = Panel, elevation = 0.dp, border = BorderStroke(1.dp, Border)) {
-        Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Secrets", style = MaterialTheme.typography.h5, color = Ink, fontWeight = FontWeight.Bold)
-                Text("Local vault", color = Muted)
-            }
-            Metric("Records", recordCount.toString(), Blue)
-            Spacer(Modifier.width(12.dp))
-            Metric("Status", status, Mint)
-        }
-    }
-}
-
-@Composable
-private fun PanelCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier = modifier, backgroundColor = Panel, elevation = 0.dp, border = BorderStroke(1.dp, Border)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
-    }
-}
-
-
-@Composable
-private fun StatePill(value: String, color: Color) {
-    Surface(color = color.copy(alpha = 0.16f), border = BorderStroke(1.dp, color)) {
-        Text(value, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = Color.White)
-    }
-}
-
-@Composable
-private fun Metric(label: String, value: String, color: Color) {
-    Column(horizontalAlignment = Alignment.End) {
-        Text(label, color = Muted, style = MaterialTheme.typography.caption)
-        Text(value, color = color, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun FieldLabel(value: String) {
-    Text(value, color = Color(0xFFB7C2CC), style = MaterialTheme.typography.caption, fontWeight = FontWeight.SemiBold)
-}
-
-@Composable
-private fun SectionTitle(value: String) {
-    Text(value, style = MaterialTheme.typography.h6, color = Ink, fontWeight = FontWeight.SemiBold)
-}
-
-@Composable
-private fun StepTitle(step: String, value: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Surface(color = Blue.copy(alpha = 0.12f), border = BorderStroke(1.dp, Blue.copy(alpha = 0.35f))) {
-            Text(step, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = Blue, fontWeight = FontWeight.SemiBold)
-        }
-        SectionTitle(value)
-    }
-}
-
-@Composable
-private fun RailTextField(value: String, onValueChange: (String) -> Unit, enabled: Boolean) {
-    OutlinedTextField(value = value, onValueChange = onValueChange, enabled = enabled, singleLine = true, modifier = Modifier.fillMaxWidth())
 }
 
