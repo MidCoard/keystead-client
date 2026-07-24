@@ -1232,28 +1232,60 @@ fun KeysteadClientApp() {
         )
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Canvas)) {
-        when (KeysteadWindowMetrics.modeForWidth(maxWidth.value)) {
-            KeysteadLayoutMode.WIDE ->
-                WideWorkspace(
-                    vaultPanel = vaultPanel,
-                    addPanel = addPanel,
-                    syncPanel = syncPanel,
-                    listPanel = listPanel,
-                    inspectorPanel = inspectorPanel,
-                    status = status,
-                    recordCount = secrets.size,
-                )
-            KeysteadLayoutMode.COMPACT ->
-                CompactWorkspace(
-                    vaultPanel = vaultPanel,
-                    addPanel = addPanel,
-                    syncPanel = syncPanel,
-                    listPanel = listPanel,
-                    inspectorPanel = inspectorPanel,
-                    status = status,
-                    recordCount = secrets.size,
-                )
+    if (session == null) {
+        Box(modifier = Modifier.fillMaxSize().background(Canvas)) {
+            top.focess.keystead.client.ui.UnlockScreen(
+                vaultDirectory = vaultDirectory,
+                vaultId = vaultId,
+                masterPassword = masterPassword,
+                onVaultDirectoryChange = { vaultDirectory = it },
+                onVaultIdChange = { vaultId = it },
+                onMasterPasswordChange = { masterPassword = it },
+                onOpen = {
+                    runAction {
+                        val opened =
+                            LocalVaultSession.openOrCreate(
+                                Path.of(vaultDirectory),
+                                UUID.fromString(vaultId),
+                                masterPassword.toCharArray(),
+                            )
+                        session?.close()
+                        session = opened
+                        masterPassword = ""
+                        selectedSecretId = null
+                        revealLifecycle.clear()
+                        revealedValue = ""
+                        clearSecretEditor()
+                        status = "Vault open"
+                        refresh(opened)
+                    }
+                },
+            )
+        }
+    } else {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Canvas)) {
+            when (KeysteadWindowMetrics.modeForWidth(maxWidth.value)) {
+                KeysteadLayoutMode.WIDE ->
+                    WideWorkspace(
+                        vaultPanel = vaultPanel,
+                        addPanel = addPanel,
+                        syncPanel = syncPanel,
+                        listPanel = listPanel,
+                        inspectorPanel = inspectorPanel,
+                        status = status,
+                        recordCount = secrets.size,
+                    )
+                KeysteadLayoutMode.COMPACT ->
+                    CompactWorkspace(
+                        vaultPanel = vaultPanel,
+                        addPanel = addPanel,
+                        syncPanel = syncPanel,
+                        listPanel = listPanel,
+                        inspectorPanel = inspectorPanel,
+                        status = status,
+                        recordCount = secrets.size,
+                    )
+            }
         }
     }
     val pendingDestructive = destructiveGate.pending
