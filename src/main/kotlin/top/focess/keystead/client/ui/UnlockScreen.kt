@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -32,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
@@ -90,6 +93,11 @@ fun UnlockScreen(
                     label = { Text("Master password") },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions =
+                        KeyboardActions(
+                            onDone = { if (masterPassword.isNotBlank()) onOpen() }
+                        ),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
@@ -129,6 +137,12 @@ fun UnlockScreen(
                         label = { Text("Vault ID") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "One vault per folder. To create a new vault, choose an empty folder; " +
+                            "the vault ID identifies the vault inside it and usually stays as-is.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
