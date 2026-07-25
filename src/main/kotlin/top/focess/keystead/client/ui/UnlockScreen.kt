@@ -40,6 +40,7 @@ fun UnlockScreen(
     vaultDirectory: String,
     vaultId: String,
     masterPassword: String,
+    errorMessage: String?,
     onVaultDirectoryChange: (String) -> Unit,
     onVaultIdChange: (String) -> Unit,
     onMasterPasswordChange: (String) -> Unit,
@@ -97,6 +98,13 @@ fun UnlockScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Open or create vault")
+                }
+                if (errorMessage != null) {
+                    Text(
+                        errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 TextButton(onClick = { advanced = !advanced }) {
                     Icon(

@@ -115,6 +115,7 @@ fun KeysteadClientApp() {
     var recoveryKit by remember { mutableStateOf("") }
     var replacementRequest by remember { mutableStateOf<ServerRecoveryDeviceRequest?>(null) }
     var status by remember { mutableStateOf("Vault locked") }
+    var unlockError by remember { mutableStateOf<String?>(null) }
     var currentDestination by remember {
         mutableStateOf(top.focess.keystead.client.ui.KeysteadDestination.SECRETS)
     }
@@ -260,7 +261,7 @@ fun KeysteadClientApp() {
         deviceIdentity = null
     }
 
-    fun runAction(action: () -> Unit) {
+    fun runAction(onError: ((String) -> Unit)? = null, action: () -> Unit) {
         try {
             action()
         } catch (error: KeysteadRevisionConflictException) {
@@ -272,8 +273,10 @@ fun KeysteadClientApp() {
             serverDeviceState = null
             unloadDeviceIdentity()
             status = error.message ?: "Server authentication failed"
+            onError?.invoke(status)
         } catch (error: RuntimeException) {
             status = error.message ?: error::class.simpleName.orEmpty()
+            onError?.invoke(status)
         }
     }
 
@@ -1189,6 +1192,7 @@ fun KeysteadClientApp() {
                 currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
                 inspectorSheetOpen = false
                 status = "Vault locked"
+                unlockError = null
             },
             secretsContent = { modifier -> listPanel(modifier) },
             inspectorContent = { modifier -> inspectorPanel(modifier) },
@@ -1200,15 +1204,35 @@ fun KeysteadClientApp() {
                     vaultDirectory = vaultDirectory,
                     vaultId = vaultId,
                     masterPassword = masterPassword,
-                    onVaultDirectoryChange = { vaultDirectory = it },
-                    onVaultIdChange = { vaultId = it },
-                    onMasterPasswordChange = { masterPassword = it },
-                    onOpen = {
-                        runAction {
+                    errorMessage = unlockError,
+                    onVaultDirectoryChange = {
+                        vaultDirectory = it
+                        unlockError = null
+                    },
+                    onVaultIdChange = {
+                        vaultId = it
+                        unlockError = null
+                    },
+                    onMasterPasswordChange = {
+                        masterPassword = it
+                        unlockError = null
+                    },
+                    onOpen = open@{
+                        if (vaultDirectory.isBlank()) {
+                            unlockError = "Vault folder must not be blank"
+                            return@open
+                        }
+                        val parsedVaultId =
+                            runCatching { UUID.fromString(vaultId) }.getOrElse {
+                                unlockError = "Vault ID must be a UUID, e.g. $defaultVaultId"
+                                return@open
+                            }
+                        unlockError = null
+                        runAction(onError = { unlockError = it }) {
                             val opened =
                                 LocalVaultSession.openOrCreate(
                                     Path.of(vaultDirectory),
-                                    UUID.fromString(vaultId),
+                                    parsedVaultId,
                                     masterPassword.toCharArray(),
                                 )
                             session?.close()
