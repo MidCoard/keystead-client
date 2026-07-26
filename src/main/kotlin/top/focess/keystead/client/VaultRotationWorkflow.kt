@@ -5,6 +5,7 @@ import java.util.Base64
 import top.focess.keystead.crypto.DefaultCryptoService
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.KeyId
+import top.focess.keystead.model.VaultFingerprint
 import top.focess.keystead.service.DeviceVaultKeyPackage
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.PreparedVaultKeyRotation
@@ -23,7 +24,7 @@ class VaultRotationWorkflow(
     ): ServerVaultRotation {
         session.prepareVaultKeyRotation().use { prepared ->
             val begun = rotations.begin(
-                session.vaultIdValue(), prepared.sourceVaultKeyId().value(),
+                session.fingerprintValue(), prepared.sourceVaultKeyId().value(),
                 prepared.targetVaultKeyId().value(), lifecycleVersion, selectedPendingUsers,
             )
             stateStore.save(state(begun, identity.deviceId, LocalRotationStage.PACKAGING))
@@ -33,19 +34,19 @@ class VaultRotationWorkflow(
 
     fun resume(session: LocalVaultSession, identity: LocalDeviceIdentity): ServerVaultRotation {
         val local = stateStore.load() ?: throw IllegalStateException("No vault rotation is pending")
-        require(local.vaultId == session.vaultIdValue() && local.deviceId == identity.deviceId) {
+        require(local.fingerprint == session.fingerprintValue() && local.deviceId == identity.deviceId) {
             "Rotation state belongs to another vault or device"
         }
-        val server = rotations.status(local.vaultId, local.generationId)
+        val server = rotations.status(local.fingerprint, local.generationId)
         if (local.stage == LocalRotationStage.LOCAL_COMMITTED) return commitServer(server)
         val self = try {
-            rotations.selfPackage(local.vaultId, local.generationId, identity.deviceId)
+            rotations.selfPackage(local.fingerprint, local.generationId, identity.deviceId)
         } catch (error: KeysteadServerException) {
             if (error.statusCode != 404) throw error
-            rotations.cancel(local.vaultId, local.generationId)
+            rotations.cancel(local.fingerprint, local.generationId)
             stateStore.clear()
             val refreshed = rotations.listMemberships()
-                .firstOrNull { it.vaultId == local.vaultId }
+                .firstOrNull { it.fingerprint == local.fingerprint }
                 ?: throw IllegalStateException("Vault membership was not found after rotation cancellation")
             return rotate(session, identity, refreshed.lifecycleVersion)
         }
@@ -67,14 +68,14 @@ class VaultRotationWorkflow(
                 "Rotation target key algorithm is unsupported"
             }
             val publicKey = Base64.getDecoder().decode(target.publicKey)
-            val context = context(current.vaultId, target)
+            val context = context(current.fingerprint, target)
             val keyPackage = try {
                 prepared.wrapVaultKeyPackageForDevice(publicKey, context)
             } finally { Wipe.wipe(publicKey); Wipe.wipe(context) }
             val encrypted = keyPackage.encryptedVaultKey()
             try {
                 current = rotations.upload(
-                    current.vaultId, current.generationId, target,
+                    current.fingerprint, current.generationId, target,
                     keyPackage.vaultKeyId().value(), Base64.getEncoder().encodeToString(encrypted),
                 )
             } finally { Wipe.wipe(encrypted) }
@@ -82,11 +83,11 @@ class VaultRotationWorkflow(
                 target.recipientId != null && target.deviceId == identity.deviceId
             ) localPackage = keyPackage
         }
-        current = rotations.status(current.vaultId, current.generationId)
+        current = rotations.status(current.fingerprint, current.generationId)
         require(current.state == ServerVaultRotationState.READY) { "Rotation package coverage is incomplete" }
         stateStore.save(state(current, identity.deviceId, LocalRotationStage.PACKAGED))
         val initiatingPackage = localPackage ?: rotations.selfPackage(
-            current.vaultId, current.generationId, identity.deviceId,
+            current.fingerprint, current.generationId, identity.deviceId,
         ).let {
             val algorithm =
                 if (it.keyAlgorithm == DefaultCryptoService.DEVICE_KEY_ALGORITHM) {
@@ -95,6 +96,7 @@ class VaultRotationWorkflow(
                     it.keyAlgorithm
                 }
             DeviceVaultKeyPackage(
+                VaultFingerprint.fromHexString(current.fingerprint),
                 KeyId(it.vaultKeyId),
                 algorithm,
                 Base64.getDecoder().decode(it.encryptedVaultKey),
@@ -106,25 +108,25 @@ class VaultRotationWorkflow(
     }
 
     private fun commitServer(current: ServerVaultRotation): ServerVaultRotation {
-        val committed = rotations.commit(current.vaultId, current.generationId)
+        val committed = rotations.commit(current.fingerprint, current.generationId)
         stateStore.clear()
         return committed
     }
 
     private fun state(rotation: ServerVaultRotation, deviceId: String, stage: LocalRotationStage) =
         LocalRotationState(
-            rotation.vaultId, rotation.generationId, rotation.sourceVaultKeyId,
+            rotation.fingerprint, rotation.generationId, rotation.sourceVaultKeyId,
             rotation.targetVaultKeyId, deviceId, stage,
         )
 
-    private fun context(vaultId: String, target: ServerVaultRotationTarget): ByteArray =
+    private fun context(fingerprint: String, target: ServerVaultRotationTarget): ByteArray =
         when (target.targetType) {
             ServerVaultRotationTargetType.DEVICE ->
-                LocalVaultSession.vaultKeyPackageContext(vaultId, requireNotNull(target.deviceId))
+                LocalVaultSession.vaultKeyPackageContext(fingerprint, requireNotNull(target.deviceId))
             ServerVaultRotationTargetType.AUTOMATION ->
-                LocalVaultSession.automationVaultKeyPackageContext(vaultId, requireNotNull(target.principalId))
+                LocalVaultSession.automationVaultKeyPackageContext(fingerprint, requireNotNull(target.principalId))
             ServerVaultRotationTargetType.RECOVERY ->
-                "keystead-recovery-vault-package-v1|vault:$vaultId|enrollment:${requireNotNull(target.enrollmentId)}|generation:${requireNotNull(target.recoveryGeneration)}"
+                "keystead-recovery-vault-package-v1|vault:$fingerprint|enrollment:${requireNotNull(target.enrollmentId)}|generation:${requireNotNull(target.recoveryGeneration)}"
                     .toByteArray(StandardCharsets.UTF_8)
         }
 }

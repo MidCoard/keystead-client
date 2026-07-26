@@ -8,16 +8,16 @@ import kotlin.test.assertTrue
 class ServerVaultMetadataTest {
 
     @Test
-    fun opaqueMetadataDoesNotExposeVaultIdOrReadableMarkers() {
-        val vaultId = "70000000-0000-0000-0000-000000000013"
+    fun opaqueMetadataDoesNotExposeVaultFingerprintOrReadableMarkers() {
+        val fingerprint = "70000000-0000-0000-0000-000000000013"
 
         val metadata =
-            ServerVaultMetadata.opaque(vaultId) { size ->
+            ServerVaultMetadata.opaque(fingerprint) { size ->
                 ByteArray(size) { index -> (index + 1).toByte() }
             }
 
         assertTrue(metadata.startsWith("v1."))
-        assertFalse(metadata.contains(vaultId))
+        assertFalse(metadata.contains(fingerprint))
         assertFalse(metadata.contains("keystead", ignoreCase = true))
         assertFalse(metadata.contains("vault", ignoreCase = true))
     }

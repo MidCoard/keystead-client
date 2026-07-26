@@ -12,7 +12,7 @@ class VaultRotationClientTest {
     @Test
     fun `list memberships parses nullable current key and exact lifecycle fields`() = withServer(
         200,
-        """[{"vaultId":"vault-1","ownerId":"owner","encryptedMetadata":"opaque","role":"EDITOR","membershipState":"ACCEPTED_PENDING_KEY","currentVaultKeyId":null,"keyLifecycleState":"STABLE","lifecycleVersion":4}]""",
+        """[{"fingerprint":"vault-1","ownerId":"owner","encryptedMetadata":"opaque","role":"EDITOR","membershipState":"ACCEPTED_PENDING_KEY","currentVaultKeyId":null,"keyLifecycleState":"STABLE","lifecycleVersion":4}]""",
     ) { client, requests ->
         val value = VaultRotationClient(client).listMemberships().single()
         assertEquals(ServerVaultMemberState.ACCEPTED_PENDING_KEY, value.membershipState)
@@ -25,7 +25,7 @@ class VaultRotationClientTest {
     @Test
     fun `unknown response fields are rejected`() = withServer(
         200,
-        """[{"vaultId":"vault-1","ownerId":"owner","encryptedMetadata":"opaque","role":"OWNER","membershipState":"ACTIVE","currentVaultKeyId":"key-1","keyLifecycleState":"STABLE","lifecycleVersion":1,"unexpected":"value"}]""",
+        """[{"fingerprint":"vault-1","ownerId":"owner","encryptedMetadata":"opaque","role":"OWNER","membershipState":"ACTIVE","currentVaultKeyId":"key-1","keyLifecycleState":"STABLE","lifecycleVersion":1,"unexpected":"value"}]""",
     ) { client, _ ->
         assertFailsWith<IllegalStateException> { VaultRotationClient(client).listMemberships() }
     }
@@ -100,7 +100,7 @@ class VaultRotationClientTest {
     }
 
     private fun rotationJson(covered: Boolean = false, state: String = "PACKAGING") =
-        """{"generationId":"generation-1","vaultId":"vault 1","sourceVaultKeyId":"key-old","targetVaultKeyId":"key-new","state":"$state","lifecycleVersion":8,"targets":[{"targetId":"target-1","targetType":"RECOVERY","recipientId":null,"deviceId":null,"principalId":null,"enrollmentId":"enrollment-1","recoveryGeneration":3,"keyAlgorithm":"TINK_ECIES_P256_HKDF_HMAC_SHA256_AES128_GCM","publicKey":"public","required":true,"covered":$covered}]}"""
+        """{"generationId":"generation-1","fingerprint":"vault 1","sourceVaultKeyId":"key-old","targetVaultKeyId":"key-new","state":"$state","lifecycleVersion":8,"targets":[{"targetId":"target-1","targetType":"RECOVERY","recipientId":null,"deviceId":null,"principalId":null,"enrollmentId":"enrollment-1","recoveryGeneration":3,"keyAlgorithm":"TINK_ECIES_P256_HKDF_HMAC_SHA256_AES128_GCM","publicKey":"public","required":true,"covered":$covered}]}"""
 
     private fun withServer(
         status: Int,

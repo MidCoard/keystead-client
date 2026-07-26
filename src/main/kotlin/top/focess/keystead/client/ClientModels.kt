@@ -7,7 +7,7 @@ enum class ClientConnectionState {
 }
 
 data class VaultSummary(
-    val vaultId: String,
+    val fingerprint: String,
     val displayName: String,
     val recordCount: Int,
     val lastSyncedRevision: Long,
@@ -40,13 +40,13 @@ object ClientHomePreview {
             vaults =
                 listOf(
                     VaultSummary(
-                        vaultId = "personal",
+                        fingerprint = "personal",
                         displayName = "Personal",
                         recordCount = 12,
                         lastSyncedRevision = 42,
                     ),
                     VaultSummary(
-                        vaultId = "developer",
+                        fingerprint = "developer",
                         displayName = "Developer",
                         recordCount = 8,
                         lastSyncedRevision = 17,

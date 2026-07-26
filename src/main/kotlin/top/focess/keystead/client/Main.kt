@@ -16,7 +16,6 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
 import java.nio.file.Path
-import java.util.UUID
 import kotlinx.coroutines.delay
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.client.ui.AddSecretPanel
@@ -29,10 +28,9 @@ import top.focess.keystead.client.ui.storageStatus
 import top.focess.keystead.model.SecretType
 
 private val defaultVaultDirectory: String =
-    Path.of(System.getProperty("user.home"), ".keystead-client", "vault").toString()
+    Path.of(System.getProperty("user.home"), ".keystead-client", "vault.kvault").toString()
 private val defaultClientDirectory: Path =
     Path.of(System.getProperty("user.home"), ".keystead-client")
-private const val defaultVaultId = "50000000-0000-0000-0000-000000000001"
 private const val desktopStorageInstance = "keystead-desktop"
 
 fun main() = application {
@@ -64,7 +62,7 @@ fun main() = application {
 @Composable
 fun KeysteadClientApp() {
     var vaultDirectory by remember { mutableStateOf(defaultVaultDirectory) }
-    var vaultId by remember { mutableStateOf(defaultVaultId) }
+    var fingerprint by remember { mutableStateOf("") }
     var masterPassword by remember { mutableStateOf("") }
     var session by remember { mutableStateOf<LocalVaultSession?>(null) }
     var secrets by remember { mutableStateOf<List<SecretListItem>>(emptyList()) }
@@ -384,13 +382,13 @@ fun KeysteadClientApp() {
         val current = session ?: return
         val owner: java.awt.Frame? = null
         val dialog = java.awt.FileDialog(owner, "Export Keystead backup", java.awt.FileDialog.SAVE)
-        dialog.file = "keystead-backup.zip"
+        dialog.file = "keystead-backup.json"
         dialog.isVisible = true
         val fileName = dialog.file ?: return
         val target = java.io.File(dialog.directory, fileName)
         runAction {
             java.io.FileOutputStream(target).use { output ->
-                VaultBackup.export(Path.of(vaultDirectory), current.vaultIdValue(), output)
+                VaultBackup.export(current, output)
             }
             status = "Exported backup to ${target.name}"
         }
@@ -400,14 +398,14 @@ fun KeysteadClientApp() {
         val current = session ?: return
         val owner: java.awt.Frame? = null
         val dialog = java.awt.FileDialog(owner, "Restore Keystead backup", java.awt.FileDialog.LOAD)
-        dialog.file = "keystead-backup.zip"
+        dialog.file = "keystead-backup.json"
         dialog.isVisible = true
         val fileName = dialog.file ?: return
         val source = java.io.File(dialog.directory, fileName)
         runAction {
             val report =
                 java.io.FileInputStream(source).use { input ->
-                    VaultBackup.restore(Path.of(vaultDirectory), current.vaultIdValue(), input)
+                    VaultBackup.restore(current, input)
                 }
             status = BackupReportFormatter.summarize(report)
             refresh(current)
@@ -417,7 +415,7 @@ fun KeysteadClientApp() {
     fun rotationStateStore(): VaultRotationStateStore =
         VaultRotationStateStore(
             (Path.of(vaultDirectory).parent ?: Path.of(vaultDirectory))
-                .resolve("rotation-$vaultId.properties"),
+                .resolve("rotation-$fingerprint.properties"),
         )
 
     val secretListQuery =
@@ -729,8 +727,8 @@ fun KeysteadClientApp() {
                 session ?: return@SyncPanel
                 runAction {
                     serverClient().putVault(
-                        vaultId,
-                        ServerVaultMetadata.opaque(vaultId),
+                        fingerprint,
+                        ServerVaultMetadata.opaque(fingerprint),
                     )
                     status = "Server vault ready"
                 }
@@ -742,7 +740,7 @@ fun KeysteadClientApp() {
                         if (vaults.isEmpty()) {
                             "No server vaults"
                         } else {
-                            "Server vaults: ${vaults.joinToString { it.vaultId }}"
+                            "Server vaults: ${vaults.joinToString { it.fingerprint }}"
                         }
                 }
             },
@@ -815,7 +813,7 @@ fun KeysteadClientApp() {
                     val pushed = current.pushPendingRecordsTo(serverClient(), state)
                     conflictAssessment = null
                     status =
-                        "Pushed $pushed records; cursor ${state.lastPushedRevision(vaultId)}"
+                        "Pushed $pushed records; cursor ${state.lastPushedRevision(fingerprint)}"
                 }
             },
             onPull = {
@@ -825,7 +823,7 @@ fun KeysteadClientApp() {
                     val pulled = current.pullPendingRecordsFrom(serverClient(), state)
                     conflictAssessment = null
                     status =
-                        "Pulled $pulled records; cursor ${state.lastPulledRevision(vaultId)}"
+                        "Pulled $pulled records; cursor ${state.lastPulledRevision(fingerprint)}"
                     refresh(current)
                 }
             },
@@ -840,6 +838,7 @@ fun KeysteadClientApp() {
                         )
                     session?.close()
                     session = opened
+                    fingerprint = opened.fingerprintValue()
                     status = "Provisioned vault open"
                     refresh(opened)
                 }
@@ -912,37 +911,37 @@ fun KeysteadClientApp() {
                 },
                 onRefreshCollaboration = {
                     runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(vaultId)
+                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
                         status = collaborationStatus(collaborationState)
                     }
                 },
                 onAcceptInvitation = {
                     runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).accept(vaultId)
+                        collaborationState = CollaborationViewModel(serverClient()).accept(fingerprint)
                         status = collaborationStatus(collaborationState)
                     }
                 },
                 onDeclineInvitation = {
                     runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).decline(vaultId)
+                        collaborationState = CollaborationViewModel(serverClient()).decline(fingerprint)
                         status = collaborationStatus(collaborationState)
                     }
                 },
                 onInviteMember = { member, role ->
                     runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).invite(vaultId, member, role)
+                        collaborationState = CollaborationViewModel(serverClient()).invite(fingerprint, member, role)
                         status = collaborationStatus(collaborationState)
                     }
                 },
                 onChangeMemberRole = { member, role ->
                     runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).changeRole(vaultId, member, role)
+                        collaborationState = CollaborationViewModel(serverClient()).changeRole(fingerprint, member, role)
                         status = collaborationStatus(collaborationState)
                     }
                 },
                 onRemoveMember = { member ->
                     runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).remove(vaultId, member)
+                        collaborationState = CollaborationViewModel(serverClient()).remove(fingerprint, member)
                         status = "Member removed; rotate the vault key before resuming writes"
                     }
                 },
@@ -951,7 +950,7 @@ fun KeysteadClientApp() {
                     runAction {
                         val count = CollaborativeVaultService(serverClient())
                             .publishUncoveredRecipientPackages(current)
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(vaultId)
+                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
                         status = "Published $count missing member device packages"
                     }
                 },
@@ -960,15 +959,15 @@ fun KeysteadClientApp() {
                     val identity = deviceIdentity ?: return@LifecyclePanel
                     runAction {
                         val membership = VaultRotationClient(serverClient()).listMemberships()
-                            .firstOrNull { it.vaultId == current.vaultIdValue() }
+                            .firstOrNull { it.fingerprint == current.fingerprintValue() }
                             ?: throw IllegalStateException("Vault membership was not found")
                         collaborationState = CollaborationUiState.Rotating(
-                            current.vaultIdValue(), 0, 0, false,
+                            current.fingerprintValue(), 0, 0, false,
                             membership.keyLifecycleState == ServerVaultKeyLifecycleState.ROTATION_REQUIRED,
                         )
                         val rotated = VaultRotationWorkflow(serverClient(), rotationStateStore())
                             .rotate(current, identity, membership.lifecycleVersion)
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(vaultId)
+                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
                         status = "Vault key rotation ${rotated.state.name.lowercase()}"
                     }
                 },
@@ -978,7 +977,7 @@ fun KeysteadClientApp() {
                     runAction {
                         val rotated = VaultRotationWorkflow(serverClient(), rotationStateStore())
                             .resume(current, identity)
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(vaultId)
+                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
                         status = "Vault key rotation ${rotated.state.name.lowercase()}"
                     }
                 },
@@ -1010,11 +1009,11 @@ fun KeysteadClientApp() {
                         val completion = OfflineRecoveryWorkflow(
                             KeysteadServerClient(serverUrl, "recovery", "recovery"),
                         ).recover(serverUsername, encodedKit, passwordChars, identity, recoveryRoot)
-                        completion.recoveredVaultIds.firstOrNull()?.let { recoveredId ->
-                            vaultId = recoveredId
-                            vaultDirectory = recoveryRoot.resolve(recoveredId).toString()
+                        completion.recoveredVaultFingerprints.firstOrNull()?.let { recoveredId ->
+                            fingerprint = recoveredId
+                            vaultDirectory = recoveryRoot.resolve("$recoveredId.kvault").toString()
                         }
-                        status = "Account and ${completion.recoveredVaultIds.size} vaults recovered"
+                        status = "Account and ${completion.recoveredVaultFingerprints.size} vaults recovered"
                     }
                 },
                 onRequestVerifiedDeviceRecovery = {
@@ -1047,7 +1046,7 @@ fun KeysteadClientApp() {
                         val completion = VerifiedDeviceRecoveryWorkflow(
                             KeysteadServerClient(serverUrl, "recovery", "recovery"),
                         ).complete(request, identity, passwordChars)
-                        status = "Account recovered; ${completion.recoveredVaultIds.size} vault packages are ready"
+                        status = "Account recovered; ${completion.recoveredVaultFingerprints.size} vault packages are ready"
                     }
                 },
         )
@@ -1202,15 +1201,10 @@ fun KeysteadClientApp() {
             unlockContent = {
                 top.focess.keystead.client.ui.UnlockScreen(
                     vaultDirectory = vaultDirectory,
-                    vaultId = vaultId,
                     masterPassword = masterPassword,
                     errorMessage = unlockError,
                     onVaultDirectoryChange = {
                         vaultDirectory = it
-                        unlockError = null
-                    },
-                    onVaultIdChange = {
-                        vaultId = it
                         unlockError = null
                     },
                     onMasterPasswordChange = {
@@ -1219,24 +1213,19 @@ fun KeysteadClientApp() {
                     },
                     onOpen = open@{
                         if (vaultDirectory.isBlank()) {
-                            unlockError = "Vault folder must not be blank"
+                            unlockError = "Vault file must not be blank"
                             return@open
                         }
-                        val parsedVaultId =
-                            runCatching { UUID.fromString(vaultId) }.getOrElse {
-                                unlockError = "Vault ID must be a UUID, e.g. $defaultVaultId"
-                                return@open
-                            }
                         unlockError = null
                         runAction(onError = { unlockError = it }) {
                             val opened =
                                 LocalVaultSession.openOrCreate(
                                     Path.of(vaultDirectory),
-                                    parsedVaultId,
                                     masterPassword.toCharArray(),
                                 )
                             session?.close()
                             session = opened
+                            fingerprint = opened.fingerprintValue()
                             masterPassword = ""
                             selectedSecretId = null
                             revealLifecycle.clear()

@@ -24,12 +24,12 @@ data class ServerRecoverySession(val token: String, val expiresAt: Instant) {
 data class ServerRecoveryVaultPackage(
     val enrollmentId: String,
     val generation: Long,
-    val vaultId: String,
+    val fingerprint: String,
     val vaultKeyId: String,
     val keyAlgorithm: String,
     val encryptedVaultKey: String,
 ) {
-    override fun toString() = "ServerRecoveryVaultPackage(enrollmentId=$enrollmentId, generation=$generation, vaultId=$vaultId, vaultKeyId=$vaultKeyId, keyAlgorithm=$keyAlgorithm, encryptedVaultKey=<redacted>)"
+    override fun toString() = "ServerRecoveryVaultPackage(enrollmentId=$enrollmentId, generation=$generation, fingerprint=$fingerprint, vaultKeyId=$vaultKeyId, keyAlgorithm=$keyAlgorithm, encryptedVaultKey=<redacted>)"
 }
 
 data class ServerRecoveryMaterial(
@@ -43,19 +43,19 @@ data class ServerRecoveryMaterial(
 }
 
 data class RecoveryCompletionVaultPackage(
-    val vaultId: String,
+    val fingerprint: String,
     val vaultKeyId: String,
     val keyAlgorithm: String,
     val encryptedVaultKey: String,
 ) {
-    override fun toString() = "RecoveryCompletionVaultPackage(vaultId=$vaultId, vaultKeyId=$vaultKeyId, keyAlgorithm=$keyAlgorithm, encryptedVaultKey=<redacted>)"
+    override fun toString() = "RecoveryCompletionVaultPackage(fingerprint=$fingerprint, vaultKeyId=$vaultKeyId, keyAlgorithm=$keyAlgorithm, encryptedVaultKey=<redacted>)"
 }
 
 data class ServerRecoveryCompletion(
     val accountRecovered: Boolean,
     val deviceId: String,
-    val recoveredVaultIds: List<String>,
-    val pendingVaultIds: List<String>,
+    val recoveredVaultFingerprints: List<String>,
+    val pendingVaultFingerprints: List<String>,
     val replacementKitRequired: Boolean,
 )
 
@@ -94,7 +94,7 @@ class RecoveryClient(private val client: KeysteadServerClient) {
         signature: String,
         packages: List<RecoveryCompletionVaultPackage>,
     ) {
-        val packageJson = packages.joinToString(",") { value -> "{\"vaultId\":\"${value.vaultId.recoveryJson()}\",\"vaultKeyId\":\"${value.vaultKeyId.recoveryJson()}\",\"keyAlgorithm\":\"${value.keyAlgorithm.recoveryJson()}\",\"encryptedVaultKey\":\"${value.encryptedVaultKey.recoveryJson()}\"}" }
+        val packageJson = packages.joinToString(",") { value -> "{\"fingerprint\":\"${value.fingerprint.recoveryJson()}\",\"vaultKeyId\":\"${value.vaultKeyId.recoveryJson()}\",\"keyAlgorithm\":\"${value.keyAlgorithm.recoveryJson()}\",\"encryptedVaultKey\":\"${value.encryptedVaultKey.recoveryJson()}\"}" }
         success(client.exchange("POST", listOf("api", "v1", "recovery", "device-requests", requestId, "approve"), body = "{\"deviceId\":\"${approverDeviceId.recoveryJson()}\",\"signature\":\"${signature.recoveryJson()}\",\"vaultPackages\":[$packageJson]}"))
     }
 
@@ -123,7 +123,7 @@ class RecoveryClient(private val client: KeysteadServerClient) {
 
     fun putVaultPackage(username: String, packageValue: ServerRecoveryVaultPackage) {
         success(client.exchange(
-            "PUT", listOf("api", "v1", "recovery", "users", username, "enrollments", packageValue.enrollmentId, "vaults", packageValue.vaultId),
+            "PUT", listOf("api", "v1", "recovery", "users", username, "enrollments", packageValue.enrollmentId, "vaults", packageValue.fingerprint),
             body = "{\"generation\":${packageValue.generation},\"vaultKeyId\":\"${packageValue.vaultKeyId.recoveryJson()}\",\"keyAlgorithm\":\"${packageValue.keyAlgorithm.recoveryJson()}\",\"encryptedVaultKey\":\"${packageValue.encryptedVaultKey.recoveryJson()}\"}",
         ))
     }
@@ -142,7 +142,7 @@ class RecoveryClient(private val client: KeysteadServerClient) {
         val value = objectValue(success(client.recoveryExchange("GET", listOf("api", "v1", "auth", "recovery", "material"), token)))
         val packages = value.getAsJsonArray("vaultPackages").map { element ->
             val item = element.asJsonObject
-            ServerRecoveryVaultPackage(item.string("enrollmentId"), item.long("generation"), item.string("vaultId"), item.string("vaultKeyId"), item.string("keyAlgorithm"), item.string("encryptedVaultKey"))
+            ServerRecoveryVaultPackage(item.string("enrollmentId"), item.long("generation"), item.string("fingerprint"), item.string("vaultKeyId"), item.string("keyAlgorithm"), item.string("encryptedVaultKey"))
         }
         return ServerRecoveryMaterial(value.string("enrollmentId"), value.long("generation"), value.string("wrappingAlgorithm"), value.string("encryptedPrivateKey"), packages)
     }
@@ -157,15 +157,15 @@ class RecoveryClient(private val client: KeysteadServerClient) {
         val wrapping = identity.publicKey()
         try {
             val packages = vaultPackages.joinToString(",") { value ->
-                "{\"vaultId\":\"${value.vaultId.recoveryJson()}\",\"vaultKeyId\":\"${value.vaultKeyId.recoveryJson()}\",\"keyAlgorithm\":\"${value.keyAlgorithm.recoveryJson()}\",\"encryptedVaultKey\":\"${value.encryptedVaultKey.recoveryJson()}\"}"
+                "{\"fingerprint\":\"${value.fingerprint.recoveryJson()}\",\"vaultKeyId\":\"${value.vaultKeyId.recoveryJson()}\",\"keyAlgorithm\":\"${value.keyAlgorithm.recoveryJson()}\",\"encryptedVaultKey\":\"${value.encryptedVaultKey.recoveryJson()}\"}"
             }
             val body = "{\"newPassword\":\"${newPassword.recoveryJson()}\",\"deviceId\":\"${identity.deviceId.recoveryJson()}\",\"proofKeyAlgorithm\":\"${identity.proofKeyAlgorithm.recoveryJson()}\",\"proofPublicKey\":\"${java.util.Base64.getEncoder().encodeToString(proof)}\",\"wrappingKeyAlgorithm\":\"${identity.keyAlgorithm.recoveryJson()}\",\"wrappingPublicKey\":\"${java.util.Base64.getEncoder().encodeToString(wrapping)}\",\"vaultPackages\":[$packages]}"
             val value = objectValue(success(client.recoveryExchange("POST", listOf("api", "v1", "auth", "recovery", "complete"), token, body)))
             return ServerRecoveryCompletion(
                 value.get("accountRecovered").asBoolean,
                 value.string("deviceId"),
-                value.getAsJsonArray("recoveredVaultIds").map { it.asString },
-                value.getAsJsonArray("pendingVaultIds").map { it.asString },
+                value.getAsJsonArray("recoveredVaultFingerprints").map { it.asString },
+                value.getAsJsonArray("pendingVaultFingerprints").map { it.asString },
                 value.get("replacementKitRequired").asBoolean,
             )
         } finally { Wipe.wipe(proof); Wipe.wipe(wrapping) }

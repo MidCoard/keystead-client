@@ -11,10 +11,10 @@ object ServerVaultMetadata {
     private val secureRandom = SecureRandom()
 
     fun opaque(
-        vaultId: String,
+        fingerprint: String,
         randomBytes: (Int) -> ByteArray = ServerVaultMetadata::secureRandomBytes,
     ): String {
-        require(vaultId.isNotBlank()) { "Vault id is required" }
+        require(fingerprint.isNotBlank()) { "Vault id is required" }
         val bytes = randomBytes(RANDOM_BYTES)
         require(bytes.size == RANDOM_BYTES) {
             "Vault metadata random source returned ${bytes.size} bytes"

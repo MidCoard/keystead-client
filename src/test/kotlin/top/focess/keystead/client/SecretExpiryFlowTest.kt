@@ -2,7 +2,6 @@ package top.focess.keystead.client
 
 import java.nio.file.Path
 import java.time.LocalDate
-import java.util.UUID
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -12,7 +11,6 @@ import kotlin.test.assertNull
 import top.focess.keystead.model.SecretType
 
 class SecretExpiryFlowTest {
-    private val vaultId = UUID.fromString("71000000-0000-0000-0000-000000000005")
     private lateinit var directory: Path
 
     @AfterTest
@@ -24,7 +22,7 @@ class SecretExpiryFlowTest {
 
     private fun open(): LocalVaultSession {
         directory = createTempDirectory("keystead-expiry")
-        return LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray())
+        return LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray())
     }
 
     @Test

@@ -11,18 +11,18 @@ import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.SecretClassification
 import top.focess.keystead.model.SecretId
 import top.focess.keystead.model.SecretType
-import top.focess.keystead.model.VaultId
+import top.focess.keystead.model.VaultFingerprint
 import top.focess.keystead.model.KeyId
 import top.focess.keystead.service.CreateVaultRequest
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.EncryptedSyncRecord
+import top.focess.keystead.service.SyncImportReport
 import top.focess.keystead.service.DeviceVaultKeyPackage
 import top.focess.keystead.service.PreparedVaultKeyRotation
 import top.focess.keystead.service.VaultHandle
 import top.focess.keystead.recovery.RecoveryCryptoService
 import top.focess.keystead.recovery.RecoveryPublicKey
 import top.focess.keystead.recovery.RecoveryVaultKeyPackage
-import top.focess.keystead.store.FileVaultStore
 
 data class LoginListItem(
     val id: String,
@@ -60,11 +60,23 @@ data class SecretEditSnapshot(
 class LocalVaultSession private constructor(
     private val service: DefaultVaultService,
     private var handle: VaultHandle,
+    private val file: Path,
 ) : AutoCloseable {
     private val syncPageLimit = 100
 
-    internal fun vaultIdValue(): String = handle.vaultId().value().toString()
+    internal fun fingerprintValue(): String = handle.vaultFingerprint().toHexString()
     internal fun vaultKeyIdValue(): String = handle.vaultKeyId().value()
+    internal fun vaultFile(): Path = file
+
+    /**
+     * Exports every encrypted record and tombstone in the vault for a full backup. Rows stay
+     * encrypted; no plaintext or vault key material leaves the handle.
+     */
+    internal fun exportAllRecords(): List<EncryptedSyncRecord> = handle.exportRecordsSince(0L)
+
+    /** Imports a backup batch of encrypted sync records, returning the per-row outcome. */
+    internal fun importBackupRecords(records: List<EncryptedSyncRecord>): SyncImportReport =
+        handle.importRecordsWithReport(records)
     internal fun prepareVaultKeyRotation(): PreparedVaultKeyRotation = handle.prepareVaultKeyRotation()
     internal fun wrapCurrentVaultKey(publicKey: ByteArray, context: ByteArray): DeviceVaultKeyPackage =
         handle.wrapVaultKeyPackageForDevice(publicKey, context)
@@ -73,7 +85,7 @@ class LocalVaultSession private constructor(
         recoveryKey: RecoveryPublicKey,
         username: String,
     ): RecoveryVaultKeyPackage =
-        recovery.wrapVaultKey(handle, recoveryKey, username, vaultIdValue())
+        recovery.wrapVaultKey(handle, recoveryKey, username)
 
     internal fun resumeVaultKeyRotation(
         keyPackage: ServerRotationPackage,
@@ -81,7 +93,7 @@ class LocalVaultSession private constructor(
     ): PreparedVaultKeyRotation {
         val encrypted = Base64.getDecoder().decode(keyPackage.encryptedVaultKey)
         val privateKey = identity.privateKey()
-        val context = vaultKeyPackageContext(vaultIdValue(), identity.deviceId)
+        val context = vaultKeyPackageContext(fingerprintValue(), identity.deviceId)
         val packageAlgorithm =
             if (keyPackage.keyAlgorithm == identity.keyAlgorithm) {
                 DefaultVaultService.DEVICE_KEY_PACKAGE_ALGORITHM
@@ -90,7 +102,12 @@ class LocalVaultSession private constructor(
             }
         return try {
             handle.resumeVaultKeyRotation(
-                DeviceVaultKeyPackage(KeyId(keyPackage.vaultKeyId), packageAlgorithm, encrypted),
+                DeviceVaultKeyPackage(
+                    handle.vaultFingerprint(),
+                    KeyId(keyPackage.vaultKeyId),
+                    packageAlgorithm,
+                    encrypted,
+                ),
                 privateKey,
                 context,
             )
@@ -289,20 +306,20 @@ class LocalVaultSession private constructor(
     }
 
     fun pushPendingRecordsTo(client: KeysteadServerClient, stateStore: SyncStateStore): Int {
-        val vaultId = handle.vaultId().value().toString()
-        val records = handle.exportRecordsSince(stateStore.lastPushedRevision(vaultId))
+        val fingerprint = fingerprintValue()
+        val records = handle.exportRecordsSince(stateStore.lastPushedRevision(fingerprint))
         pushRecords(client, records)
-        records.maxOfOrNull { it.revision() }?.let { stateStore.recordPushed(vaultId, it) }
+        records.maxOfOrNull { it.revision() }?.let { stateStore.recordPushed(fingerprint, it) }
         return records.size
     }
 
     private fun pushRecords(client: KeysteadServerClient, records: List<EncryptedSyncRecord>) {
         records.forEach { record ->
             if (record.deleted()) {
-                client.deleteRecord(record.vaultId(), record.secretId(), record.revision())
+                client.deleteRecord(record.fingerprint(), record.secretId(), record.revision())
             } else {
                 client.putRecord(
-                    record.vaultId(),
+                    record.fingerprint(),
                     record.secretId(),
                     ServerEncryptedRecord(
                         revision = record.revision(),
@@ -321,25 +338,25 @@ class LocalVaultSession private constructor(
     }
 
     fun pullPendingRecordsFrom(client: KeysteadServerClient, stateStore: SyncStateStore): Int {
-        val vaultId = handle.vaultId().value().toString()
-        val result = pullRecordPagesFrom(client, stateStore.lastPulledRevision(vaultId))
-        stateStore.recordPulled(vaultId, result.highestRevision)
+        val fingerprint = fingerprintValue()
+        val result = pullRecordPagesFrom(client, stateStore.lastPulledRevision(fingerprint))
+        stateStore.recordPulled(fingerprint, result.highestRevision)
         return result.imported
     }
 
     private fun pullRecordPagesFrom(client: KeysteadServerClient, sinceRevision: Long): PullResult {
-        val vaultId = handle.vaultId().value().toString()
+        val fingerprint = fingerprintValue()
         var cursor = sinceRevision
         var highestRevision = sinceRevision
         var imported = 0
         do {
-            val page = client.listRecordPage(vaultId, cursor, syncPageLimit)
+            val page = client.listRecordPage(fingerprint, cursor, syncPageLimit)
             imported += importServerRecords(page.records)
             highestRevision = maxOf(highestRevision, page.highestRevision)
             val nextCursor = page.nextSinceRevision ?: page.highestRevision
             if (page.hasMore && nextCursor <= cursor) {
                 throw IllegalStateException(
-                    "Server record page did not advance cursor for vault $vaultId from revision $cursor",
+                    "Server record page did not advance cursor for vault $fingerprint from revision $cursor",
                 )
             }
             cursor = nextCursor
@@ -348,11 +365,11 @@ class LocalVaultSession private constructor(
     }
 
     private fun importServerRecords(records: List<ServerEncryptedRecord>): Int {
-        val vaultId = handle.vaultId().value().toString()
+        val fingerprint = fingerprintValue()
         return handle.importRecords(
             records.map { record ->
                 EncryptedSyncRecord(
-                    vaultId,
+                    fingerprint,
                     requireNotNull(record.secretId) { "Server record is missing secretId" },
                     record.revision,
                     record.secretType,
@@ -453,20 +470,20 @@ class LocalVaultSession private constructor(
         require(keyAlgorithm == DefaultCryptoService.DEVICE_KEY_ALGORITHM) {
             "Unsupported device wrapping key algorithm"
         }
-        val vaultId = handle.vaultId().value().toString()
-        val context = vaultKeyPackageContext(vaultId, deviceId)
+        val fingerprint = fingerprintValue()
+        val context = vaultKeyPackageContext(fingerprint, deviceId)
         val wrapped = handle.wrapVaultKeyPackageForDevice(devicePublicKey, context)
         val encryptedVaultKey = wrapped.encryptedVaultKey()
         return try {
             val keyPackage =
                 ServerVaultKeyPackage(
-                    vaultId = vaultId,
+                    fingerprint = fingerprint,
                     deviceId = deviceId,
                     vaultKeyId = wrapped.vaultKeyId().value(),
                     keyAlgorithm = wrapped.keyAlgorithm(),
                     encryptedVaultKey = Base64.getEncoder().encodeToString(encryptedVaultKey),
                 )
-            client.putVaultKeyPackage(vaultId, deviceId, keyPackage)
+            client.putVaultKeyPackage(fingerprint, deviceId, keyPackage)
             keyPackage
         } finally {
             Wipe.wipe(encryptedVaultKey)
@@ -542,10 +559,13 @@ class LocalVaultSession private constructor(
     fun rotateVaultKey(masterPassword: CharArray): String {
         val password = masterPassword.copyOf()
         return try {
-            val replacement = service.rotateVaultKey(handle.vaultId(), password)
+            // The file-based rotation reopens the vault file, which the v2 OneFileVaultStore guards
+            // with a process-wide lock held by the current handle. Close the handle first so the
+            // rotation can reacquire the lock; the on-disk state is consistent, so reopening is safe.
             val previous = handle
-            handle = replacement
             previous.close()
+            val replacement = service.rotateVaultKey(file, password)
+            handle = replacement
             replacement.vaultKeyId().value()
         } finally {
             Wipe.wipe(password)
@@ -558,7 +578,7 @@ class LocalVaultSession private constructor(
         masterPassword: CharArray,
     ): String {
         val vaultKeyId = rotateVaultKey(masterPassword)
-        client.rotateVaultKey(handle.vaultId().value().toString(), vaultKeyId)
+        client.rotateVaultKey(fingerprintValue(), vaultKeyId)
         publishVaultKeyPackagesForRegisteredDevices(client)
         return vaultKeyId
     }
@@ -568,8 +588,8 @@ class LocalVaultSession private constructor(
         principalId: String,
         publicKey: ByteArray,
     ): ServerAutomationVaultKeyPackage {
-        val vaultId = handle.vaultId().value().toString()
-        val context = automationVaultKeyPackageContext(vaultId, principalId)
+        val fingerprint = fingerprintValue()
+        val context = automationVaultKeyPackageContext(fingerprint, principalId)
         val wrapped = handle.wrapVaultKeyPackageForDevice(publicKey, context)
         val encryptedVaultKey = wrapped.encryptedVaultKey()
         return try {
@@ -577,7 +597,7 @@ class LocalVaultSession private constructor(
                 vaultKeyId = wrapped.vaultKeyId().value(),
                 keyAlgorithm = wrapped.keyAlgorithm(),
                 encryptedVaultKey = Base64.getEncoder().encodeToString(encryptedVaultKey),
-            ).also { client.putAutomationVaultKeyPackage(vaultId, principalId, it) }
+            ).also { client.putAutomationVaultKeyPackage(fingerprint, principalId, it) }
         } finally {
             Wipe.wipe(encryptedVaultKey)
             Wipe.wipe(context)
@@ -589,31 +609,26 @@ class LocalVaultSession private constructor(
     }
 
     companion object {
-        fun vaultKeyPackageContext(vaultId: String, deviceId: String): ByteArray =
-            "keystead-vault-key-package-v1|vault:$vaultId|device:$deviceId"
+        fun vaultKeyPackageContext(fingerprint: String, deviceId: String): ByteArray =
+            "keystead-vault-key-package-v1|vault:$fingerprint|device:$deviceId"
                 .toByteArray(StandardCharsets.UTF_8)
 
-        fun automationVaultKeyPackageContext(vaultId: String, principalId: String): ByteArray =
-            "keystead-automation-vault-key-package-v1|vault:$vaultId|principal:$principalId"
+        fun automationVaultKeyPackageContext(fingerprint: String, principalId: String): ByteArray =
+            "keystead-automation-vault-key-package-v1|vault:$fingerprint|principal:$principalId"
                 .toByteArray(StandardCharsets.UTF_8)
 
-        fun openOrCreate(
-            directory: Path,
-            vaultId: UUID,
-            masterPassword: CharArray,
-        ): LocalVaultSession {
-            Files.createDirectories(directory)
-            val service = DefaultVaultService(FileVaultStore(directory))
-            val id = VaultId(vaultId)
+        fun openOrCreate(file: Path, masterPassword: CharArray): LocalVaultSession {
+            val service = DefaultVaultService()
             val password = masterPassword.copyOf()
             return try {
                 val handle =
-                    if (Files.exists(directory.resolve("vault.properties"))) {
-                        service.openVault(id, password)
+                    if (Files.exists(file)) {
+                        service.openVault(file, password)
                     } else {
-                        service.createVault(CreateVaultRequest(id), password)
+                        file.parent?.let { Files.createDirectories(it) }
+                        service.createVault(CreateVaultRequest(file), password)
                     }
-                LocalVaultSession(service, handle)
+                LocalVaultSession(service, handle, file)
             } finally {
                 Wipe.wipe(password)
                 Wipe.wipe(masterPassword)
@@ -621,33 +636,39 @@ class LocalVaultSession private constructor(
         }
 
         fun openProvisionedFromServer(
-            directory: Path,
-            vaultId: UUID,
+            file: Path,
+            fingerprint: String,
             deviceId: String,
             devicePrivateKey: ByteArray,
             client: KeysteadServerClient,
         ): LocalVaultSession {
-            Files.createDirectories(directory)
-            val service = DefaultVaultService(FileVaultStore(directory))
-            val id = VaultId(vaultId)
+            val service = DefaultVaultService()
             val privateKey = devicePrivateKey.copyOf()
-            val context = vaultKeyPackageContext(vaultId.toString(), deviceId)
+            val context = vaultKeyPackageContext(fingerprint, deviceId)
             var wrappedVaultKey: ByteArray? = null
             return try {
                 val handle =
-                    if (Files.exists(directory.resolve("vault.properties"))) {
-                        service.openVaultWithDeviceKey(id, privateKey, context)
+                    if (Files.exists(file)) {
+                        service.openVaultWithDeviceKey(file, privateKey, context)
                     } else {
+                        file.parent?.let { Files.createDirectories(it) }
                         val keyPackage =
-                            client.listVaultKeyPackages(vaultId.toString())
+                            client.listVaultKeyPackages(fingerprint)
                                 .firstOrNull { it.deviceId == deviceId }
                                 ?: throw IllegalStateException(
                                     "Server did not return a vault key package for device $deviceId",
                                 )
                         wrappedVaultKey = Base64.getDecoder().decode(keyPackage.encryptedVaultKey)
-                        service.provisionVault(id, wrappedVaultKey, privateKey, context)
+                        val devicePackage =
+                            DeviceVaultKeyPackage(
+                                VaultFingerprint.fromHexString(fingerprint),
+                                KeyId(keyPackage.vaultKeyId),
+                                keyPackage.keyAlgorithm,
+                                wrappedVaultKey,
+                            )
+                        service.provisionVault(file, devicePackage, privateKey, context)
                     }
-                LocalVaultSession(service, handle)
+                LocalVaultSession(service, handle, file)
             } finally {
                 Wipe.wipe(privateKey)
                 Wipe.wipe(context)
@@ -656,16 +677,16 @@ class LocalVaultSession private constructor(
         }
 
         fun openProvisionedFromServer(
-            directory: Path,
-            vaultId: UUID,
+            file: Path,
+            fingerprint: String,
             identity: LocalDeviceIdentity,
             client: KeysteadServerClient,
         ): LocalVaultSession {
             val privateKey = identity.privateKey()
             return try {
                 openProvisionedFromServer(
-                    directory = directory,
-                    vaultId = vaultId,
+                    file = file,
+                    fingerprint = fingerprint,
                     deviceId = identity.deviceId,
                     devicePrivateKey = privateKey,
                     client = client,
@@ -676,22 +697,22 @@ class LocalVaultSession private constructor(
         }
 
         fun openFirstProvisionedFromServer(
-            directory: Path,
+            file: Path,
             identity: LocalDeviceIdentity,
             client: KeysteadServerClient,
         ): LocalVaultSession {
             val vault =
                 client.listVaults()
                     .firstOrNull { serverVault ->
-                        client.listVaultKeyPackages(serverVault.vaultId)
+                        client.listVaultKeyPackages(serverVault.fingerprint)
                             .any { it.deviceId == identity.deviceId }
                     }
                     ?: throw IllegalStateException(
                         "Server did not return a provisioned vault for device ${identity.deviceId}",
                     )
             return openProvisionedFromServer(
-                directory = directory,
-                vaultId = UUID.fromString(vault.vaultId),
+                file = file,
+                fingerprint = vault.fingerprint,
                 identity = identity,
                 client = client,
             )

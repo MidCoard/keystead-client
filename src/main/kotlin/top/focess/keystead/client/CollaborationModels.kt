@@ -8,7 +8,7 @@ enum class ServerVaultRotationState { OPEN, PACKAGING, READY, COMMITTED }
 enum class ServerVaultRotationTargetType { DEVICE, AUTOMATION, RECOVERY }
 
 data class ServerVaultMembership(
-    val vaultId: String,
+    val fingerprint: String,
     val ownerId: String,
     val encryptedMetadata: String,
     val role: String,
@@ -19,7 +19,7 @@ data class ServerVaultMembership(
 )
 
 data class ServerVaultMember(
-    val vaultId: String,
+    val fingerprint: String,
     val userId: String,
     val role: String,
     val state: ServerVaultMemberState,
@@ -53,7 +53,7 @@ data class ServerVaultRotationTarget(
 
 data class ServerVaultRotation(
     val generationId: String,
-    val vaultId: String,
+    val fingerprint: String,
     val sourceVaultKeyId: String,
     val targetVaultKeyId: String,
     val state: ServerVaultRotationState,

@@ -10,21 +10,21 @@ class CollaborativeVaultService(
 ) {
     fun publishUncoveredRecipientPackages(session: LocalVaultSession): Int {
         var published = 0
-        collaboration.packageRecipients(session.vaultIdValue())
+        collaboration.packageRecipients(session.fingerprintValue())
             .filter { !it.covered && it.keyAlgorithm == DefaultCryptoService.DEVICE_KEY_ALGORITHM }
             .forEach { target ->
                 val publicKey = Base64.getDecoder().decode(target.publicKey)
-                val context = LocalVaultSession.vaultKeyPackageContext(session.vaultIdValue(), target.deviceId)
+                val context = LocalVaultSession.vaultKeyPackageContext(session.fingerprintValue(), target.deviceId)
                 try {
                     val wrapped = session.wrapCurrentVaultKey(publicKey, context)
                     val encrypted = wrapped.encryptedVaultKey()
                     try {
                         client.putRecipientVaultKeyPackage(
-                            session.vaultIdValue(),
+                            session.fingerprintValue(),
                             target.userId,
                             target.deviceId,
                             ServerVaultKeyPackage(
-                                session.vaultIdValue(), target.deviceId, wrapped.vaultKeyId().value(),
+                                session.fingerprintValue(), target.deviceId, wrapped.vaultKeyId().value(),
                                 wrapped.keyAlgorithm(), Base64.getEncoder().encodeToString(encrypted),
                             ),
                         )

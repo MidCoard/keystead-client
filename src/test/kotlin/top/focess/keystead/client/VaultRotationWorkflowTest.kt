@@ -6,7 +6,6 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.util.Base64
-import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -18,7 +17,7 @@ class VaultRotationWorkflowTest {
         val directory = Files.createTempDirectory("keystead-rotation-workflow")
         DeviceIdentityStore(directory.resolve("identity")).createMemoryOnly("device-1").use { identity ->
             LocalVaultSession.openOrCreate(
-                directory.resolve("vault"), UUID.randomUUID(), "master-password".toCharArray(),
+                directory.resolve("vault"), "master-password".toCharArray(),
             ).use { vault ->
                 RotationServer(identity).use { server ->
                     server.failNextUpload = true
@@ -44,7 +43,7 @@ class VaultRotationWorkflowTest {
         val directory = Files.createTempDirectory("keystead-rotation-workflow")
         DeviceIdentityStore(directory.resolve("identity")).createMemoryOnly("device-1").use { identity ->
             LocalVaultSession.openOrCreate(
-                directory.resolve("vault"), UUID.randomUUID(), "master-password".toCharArray(),
+                directory.resolve("vault"), "master-password".toCharArray(),
             ).use { vault ->
                 RotationServer(identity).use { server ->
                     server.failNextCommit = true
@@ -75,7 +74,7 @@ class VaultRotationWorkflowTest {
         val directory = Files.createTempDirectory("keystead-rotation-workflow")
         DeviceIdentityStore(directory.resolve("identity")).createMemoryOnly("device-1").use { identity ->
             LocalVaultSession.openOrCreate(
-                directory.resolve("vault"), UUID.randomUUID(), "master-password".toCharArray(),
+                directory.resolve("vault"), "master-password".toCharArray(),
             ).use { vault ->
                 RotationServer(identity).use { server ->
                     server.includeOtherTarget = true
@@ -130,10 +129,10 @@ class VaultRotationWorkflowTest {
             val path = exchange.requestURI.path
             val method = exchange.requestMethod
             val body = exchange.requestBody.readBytes().decodeToString()
-            if (lastVaultId.isEmpty()) {
+            if (lastVaultFingerprint.isEmpty()) {
                 Regex("/api/v1/vaults/([^/]+)").find(path)
                     ?.groupValues?.get(1)?.let {
-                        lastVaultId = java.net.URLDecoder.decode(it, Charsets.UTF_8)
+                        lastVaultFingerprint = java.net.URLDecoder.decode(it, Charsets.UTF_8)
                     }
             }
             when {
@@ -195,7 +194,7 @@ class VaultRotationWorkflowTest {
                     respond(
                         exchange,
                         200,
-                        """[{"vaultId":"$lastVaultId","ownerId":"owner","encryptedMetadata":"opaque","role":"OWNER","membershipState":"ACTIVE","currentVaultKeyId":"$sourceKeyId","keyLifecycleState":"STABLE","lifecycleVersion":$lifecycleVersion}]""",
+                        """[{"fingerprint":"$lastVaultFingerprint","ownerId":"owner","encryptedMetadata":"opaque","role":"OWNER","membershipState":"ACTIVE","currentVaultKeyId":"$sourceKeyId","keyLifecycleState":"STABLE","lifecycleVersion":$lifecycleVersion}]""",
                     )
                 method == "POST" && path.endsWith("/commit") -> {
                     commitCount++
@@ -216,11 +215,11 @@ class VaultRotationWorkflowTest {
             val other = if (includeOtherTarget) {
                 """,{"targetId":"target-other","targetType":"DEVICE","recipientId":"owner","deviceId":"device-2","principalId":null,"enrollmentId":null,"recoveryGeneration":null,"keyAlgorithm":"TINK_ECIES_P256_HKDF_HMAC_SHA256_AES128_GCM","publicKey":"$publicKey","required":true,"covered":${encryptedOtherPackage != null}}"""
             } else ""
-            return """{"generationId":"$generationId","vaultId":"${currentVaultId()}","sourceVaultKeyId":"$sourceKeyId","targetVaultKeyId":"$targetKeyId","state":"$rotationState","lifecycleVersion":$lifecycleVersion,"targets":[$self$other]}"""
+            return """{"generationId":"$generationId","fingerprint":"${currentVaultFingerprint()}","sourceVaultKeyId":"$sourceKeyId","targetVaultKeyId":"$targetKeyId","state":"$rotationState","lifecycleVersion":$lifecycleVersion,"targets":[$self$other]}"""
         }
 
-        private var lastVaultId = ""
-        private fun currentVaultId(): String = lastVaultId
+        private var lastVaultFingerprint = ""
+        private fun currentVaultFingerprint(): String = lastVaultFingerprint
 
         private fun respond(exchange: HttpExchange, status: Int, body: String) {
             val bytes = body.encodeToByteArray()

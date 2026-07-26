@@ -2,12 +2,11 @@ package top.focess.keystead.client
 
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
+import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
 import java.util.Base64
-import java.util.UUID
 import kotlin.io.path.createTempDirectory
-import kotlin.io.path.deleteIfExists
 import org.junit.jupiter.api.assertTimeoutPreemptively
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,9 +22,10 @@ class LocalVaultSyncTest {
     fun pushRecordsToServerSendsEncryptedProfileAndEnvelope() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-sync-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000001")
+            lateinit var fingerprint: String
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
                 session.addLogin(
                     title = "GitHub",
                     username = "alice@example.com",
@@ -44,7 +44,7 @@ class LocalVaultSyncTest {
 
             val request = requests.single()
             assertEquals("PUT", request.method)
-            assertTrue(request.path.startsWith("/api/v1/vaults/$vaultId/records/"))
+            assertTrue(request.path.startsWith("/api/v1/vaults/$fingerprint/records/"))
             assertTrue(request.body.contains(""""secretType":"LOGIN_PASSWORD""""))
             assertTrue(request.body.contains(""""encryptedProfile":""""))
             assertTrue(request.body.contains(""""envelope":""""))
@@ -59,47 +59,47 @@ class LocalVaultSyncTest {
     fun pullRecordsFromServerImportsEncryptedRecordsLocally() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-sync-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000002")
+            lateinit var fingerprint: String
             lateinit var exported: String
+            lateinit var target: LocalVaultSession
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
-                val id =
-                    session.addStructuredSecret(
-                        type = SecretType.API_TOKEN,
-                        title = "GitHub token",
-                        fields = mapOf("token" to "ghp_secret"),
-                        category = "development",
-                        provider = "github",
-                        account = "alice@example.com",
-                    )
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
+                session.addStructuredSecret(
+                    type = SecretType.API_TOKEN,
+                    title = "GitHub token",
+                    fields = mapOf("token" to "ghp_secret"),
+                    category = "development",
+                    provider = "github",
+                    account = "alice@example.com",
+                )
                 session.pushRecordsTo(KeysteadServerClient(baseUrl, "alice", "server-password"), 0)
                 val pushed = requests.single()
                 val secretId = pushed.path.substringAfterLast("/")
                 exported =
                     pushed.body.replaceFirst(
                         "{",
-                        """{"vaultId":"$vaultId","secretId":"$secretId",""",
+                        """{"fingerprint":"$fingerprint","secretId":"$secretId",""",
                     )
-                directory.resolve("secrets").resolve("$secretId.properties").deleteIfExists()
-                assertTrue(session.listSecrets().isEmpty())
+                target = provisionEmptyTarget(session, fingerprint, directory, baseUrl)
             }
 
             requests.clear()
-            responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
-                recordPage(vaultId, 0, "[$exported]", highestRevision = 1, hasMore = false)
+            responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
+                recordPage(fingerprint, 0, "[$exported]", highestRevision = 1, hasMore = false)
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            target.use {
                 val count =
-                    session.pullRecordsFrom(
+                    it.pullRecordsFrom(
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                         sinceRevision = 0,
                     )
 
-                val imported = session.listSecrets().single()
+                val imported = it.listSecrets().single()
                 assertEquals(1, count)
                 assertEquals("GitHub token", imported.title)
                 assertEquals(SecretType.API_TOKEN.name, imported.type)
-                assertEquals("ghp_secret", session.revealField(imported.id, "token"))
+                assertEquals("ghp_secret", it.revealField(imported.id, "token"))
             }
         }
 
@@ -107,11 +107,13 @@ class LocalVaultSyncTest {
     fun pullRecordsFromServerRemovesImportedRecordWhenTombstoneOmitsOpaqueFields() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-tombstone-sync-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000021")
+            lateinit var fingerprint: String
             lateinit var secretId: String
             lateinit var exported: String
+            lateinit var target: LocalVaultSession
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { source ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { source ->
+                fingerprint = source.fingerprintValue()
                 source.addStructuredSecret(
                     type = SecretType.API_TOKEN,
                     title = "Imported token",
@@ -123,46 +125,46 @@ class LocalVaultSyncTest {
                 exported =
                     pushed.body.replaceFirst(
                         "{",
-                        """{"vaultId":"$vaultId","secretId":"$secretId",""",
+                        """{"fingerprint":"$fingerprint","secretId":"$secretId",""",
                     )
-                directory.resolve("secrets").resolve("$secretId.properties").deleteIfExists()
+                target = provisionEmptyTarget(source, fingerprint, directory, baseUrl)
             }
 
             requests.clear()
-            responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
-                recordPage(vaultId, 0, "[$exported]", highestRevision = 1, hasMore = false)
+            responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
+                recordPage(fingerprint, 0, "[$exported]", highestRevision = 1, hasMore = false)
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { target ->
+            target.use {
                 assertEquals(
                     1,
-                    target.pullRecordsFrom(
+                    it.pullRecordsFrom(
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                         sinceRevision = 0,
                     ),
                 )
-                assertEquals(listOf(secretId), target.listSecrets().map { it.id })
+                assertEquals(listOf(secretId), it.listSecrets().map { it.id })
 
                 val tombstone =
                     """
                     {
-                      "vaultId": "$vaultId",
+                      "fingerprint": "$fingerprint",
                       "secretId": "$secretId",
                       "revision": 2,
                       "secretType": "API_TOKEN",
                       "deleted": true
                     }
                     """.trimIndent()
-                responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=1&limit=100"] =
-                    recordPage(vaultId, 1, "[$tombstone]", highestRevision = 2, hasMore = false)
+                responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=1&limit=100"] =
+                    recordPage(fingerprint, 1, "[$tombstone]", highestRevision = 2, hasMore = false)
 
                 assertEquals(
                     1,
-                    target.pullRecordsFrom(
+                    it.pullRecordsFrom(
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                         sinceRevision = 1,
                     ),
                 )
-                assertTrue(target.listSecrets().isEmpty())
+                assertTrue(it.listSecrets().isEmpty())
             }
         }
 
@@ -170,9 +172,10 @@ class LocalVaultSyncTest {
     fun pushRecordsToServerSendsDeletesAsTombstoneRequests() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-delete-sync-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000005")
+            lateinit var fingerprint: String
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
                 val id =
                     session.addStructuredSecret(
                         type = SecretType.API_TOKEN,
@@ -194,7 +197,7 @@ class LocalVaultSyncTest {
 
             val request = requests.single()
             assertEquals("DELETE", request.method)
-            assertTrue(request.path.startsWith("/api/v1/vaults/$vaultId/records/"))
+            assertTrue(request.path.startsWith("/api/v1/vaults/$fingerprint/records/"))
             assertTrue(request.path.endsWith("?revision=2"))
             assertEquals("", request.body)
         }
@@ -204,9 +207,10 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-pending-sync-test")
             val state = SyncStateStore(createTempDirectory("keystead-client-sync-state-test"))
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000007")
+            lateinit var fingerprint: String
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
                 session.addStructuredSecret(
                     type = SecretType.API_TOKEN,
                     title = "First token",
@@ -219,7 +223,7 @@ class LocalVaultSyncTest {
                         state,
                     ),
                 )
-                assertEquals(1, state.lastPushedRevision(vaultId.toString()))
+                assertEquals(1, state.lastPushedRevision(fingerprint))
                 requests.clear()
 
                 session.addStructuredSecret(
@@ -234,7 +238,7 @@ class LocalVaultSyncTest {
                         state,
                     ),
                 )
-                assertEquals(2, state.lastPushedRevision(vaultId.toString()))
+                assertEquals(2, state.lastPushedRevision(fingerprint))
             }
 
             val request = requests.single()
@@ -247,9 +251,10 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-update-sync-test")
             val state = SyncStateStore(createTempDirectory("keystead-client-sync-state-test"))
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000009")
+            lateinit var fingerprint: String
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
                 val id =
                     session.addStructuredSecret(
                         type = SecretType.API_TOKEN,
@@ -276,7 +281,7 @@ class LocalVaultSyncTest {
 
             val request = requests.single()
             assertEquals("PUT", request.method)
-            assertTrue(request.path.startsWith("/api/v1/vaults/$vaultId/records/"))
+            assertTrue(request.path.startsWith("/api/v1/vaults/$fingerprint/records/"))
             assertTrue(request.body.contains(""""revision":2"""))
         }
 
@@ -285,9 +290,10 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-conflict-sync-test")
             val state = SyncStateStore(createTempDirectory("keystead-client-sync-state-test"))
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000010")
+            lateinit var fingerprint: String
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
                 val id =
                     session.addStructuredSecret(
                         type = SecretType.API_TOKEN,
@@ -295,7 +301,7 @@ class LocalVaultSyncTest {
                         fields = mapOf("token" to "old"),
                     )
                 session.pushPendingRecordsTo(KeysteadServerClient(baseUrl, "alice", "server-password"), state)
-                assertEquals(1, state.lastPushedRevision(vaultId.toString()))
+                assertEquals(1, state.lastPushedRevision(fingerprint))
                 requests.clear()
 
                 responseCode = 409
@@ -311,7 +317,7 @@ class LocalVaultSyncTest {
                         state,
                     )
                 }
-                assertEquals(1, state.lastPushedRevision(vaultId.toString()))
+                assertEquals(1, state.lastPushedRevision(fingerprint))
             }
 
             assertEquals(1, requests.size)
@@ -323,10 +329,12 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-pull-sync-test")
             val state = SyncStateStore(createTempDirectory("keystead-client-sync-state-test"))
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000008")
+            lateinit var fingerprint: String
             lateinit var exported: String
+            lateinit var target: LocalVaultSession
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
                 session.addStructuredSecret(
                     type = SecretType.API_TOKEN,
                     title = "GitHub token",
@@ -338,37 +346,37 @@ class LocalVaultSyncTest {
                 exported =
                     pushed.body.replaceFirst(
                         "{",
-                        """{"vaultId":"$vaultId","secretId":"$secretId",""",
+                        """{"fingerprint":"$fingerprint","secretId":"$secretId",""",
                     )
-                directory.resolve("secrets").resolve("$secretId.properties").deleteIfExists()
+                target = provisionEmptyTarget(session, fingerprint, directory, baseUrl)
             }
             requests.clear()
-            responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
-                recordPage(vaultId, 0, "[$exported]", highestRevision = 1, hasMore = false)
+            responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
+                recordPage(fingerprint, 0, "[$exported]", highestRevision = 1, hasMore = false)
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { target ->
+            target.use {
                 assertEquals(
                     1,
-                    target.pullPendingRecordsFrom(
+                    it.pullPendingRecordsFrom(
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                         state,
                     ),
                 )
-                assertEquals(1, state.lastPulledRevision(vaultId.toString()))
-                responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=1&limit=100"] =
-                    recordPage(vaultId, 1, "[]", highestRevision = 1, hasMore = false)
+                assertEquals(1, state.lastPulledRevision(fingerprint))
+                responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=1&limit=100"] =
+                    recordPage(fingerprint, 1, "[]", highestRevision = 1, hasMore = false)
 
                 assertEquals(
                     0,
-                    target.pullPendingRecordsFrom(
+                    it.pullPendingRecordsFrom(
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                         state,
                     ),
                 )
             }
 
-            assertEquals("/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100", requests[0].path)
-            assertEquals("/api/v1/vaults/$vaultId/records/page?sinceRevision=1&limit=100", requests[1].path)
+            assertEquals("/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100", requests[0].path)
+            assertEquals("/api/v1/vaults/$fingerprint/records/page?sinceRevision=1&limit=100", requests[1].path)
         }
 
     @Test
@@ -376,11 +384,13 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val sourceDirectory = createTempDirectory("keystead-client-page-source-test")
             val state = SyncStateStore(createTempDirectory("keystead-client-page-state-test"))
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000013")
+            lateinit var fingerprint: String
             lateinit var firstExported: String
             lateinit var secondExported: String
+            lateinit var target: LocalVaultSession
 
-            LocalVaultSession.openOrCreate(sourceDirectory, vaultId, "master-password".toCharArray()).use { source ->
+            LocalVaultSession.openOrCreate(sourceDirectory.resolve("vault.kvault"), "master-password".toCharArray()).use { source ->
+                fingerprint = source.fingerprintValue()
                 source.addStructuredSecret(
                     type = SecretType.API_TOKEN,
                     title = "First token",
@@ -392,7 +402,7 @@ class LocalVaultSyncTest {
                 firstExported =
                     firstPushed.body.replaceFirst(
                         "{",
-                        """{"vaultId":"$vaultId","secretId":"$firstSecretId",""",
+                        """{"fingerprint":"$fingerprint","secretId":"$firstSecretId",""",
                     )
                 requests.clear()
 
@@ -407,45 +417,44 @@ class LocalVaultSyncTest {
                 secondExported =
                     secondPushed.body.replaceFirst(
                         "{",
-                        """{"vaultId":"$vaultId","secretId":"$secondSecretId",""",
+                        """{"fingerprint":"$fingerprint","secretId":"$secondSecretId",""",
                     )
-                sourceDirectory.resolve("secrets").resolve("$firstSecretId.properties").deleteIfExists()
-                sourceDirectory.resolve("secrets").resolve("$secondSecretId.properties").deleteIfExists()
+                target = provisionEmptyTarget(source, fingerprint, sourceDirectory, baseUrl)
             }
             requests.clear()
-            responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
+            responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
                 recordPage(
-                    vaultId = vaultId,
+                    fingerprint = fingerprint,
                     sinceRevision = 0,
                     records = "[$firstExported]",
                     highestRevision = 1,
                     hasMore = true,
                     nextSinceRevision = 1,
                 )
-            responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=1&limit=100"] =
+            responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=1&limit=100"] =
                 recordPage(
-                    vaultId = vaultId,
+                    fingerprint = fingerprint,
                     sinceRevision = 1,
                     records = "[$secondExported]",
                     highestRevision = 2,
                     hasMore = false,
                 )
 
-            LocalVaultSession.openOrCreate(sourceDirectory, vaultId, "master-password".toCharArray()).use { target ->
+            target.use {
                 assertEquals(
                     2,
-                    target.pullPendingRecordsFrom(
+                    it.pullPendingRecordsFrom(
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                         state,
                     ),
                 )
 
-                assertEquals(2, state.lastPulledRevision(vaultId.toString()))
-                assertEquals(listOf("First token", "Second token"), target.listSecrets().map { it.title }.sorted())
+                assertEquals(2, state.lastPulledRevision(fingerprint))
+                assertEquals(listOf("First token", "Second token"), it.listSecrets().map { it.title }.sorted())
             }
 
-            assertEquals("/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100", requests[0].path)
-            assertEquals("/api/v1/vaults/$vaultId/records/page?sinceRevision=1&limit=100", requests[1].path)
+            assertEquals("/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100", requests[0].path)
+            assertEquals("/api/v1/vaults/$fingerprint/records/page?sinceRevision=1&limit=100", requests[1].path)
         }
 
     @Test
@@ -453,18 +462,21 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-stalled-page-test")
             val state = SyncStateStore(createTempDirectory("keystead-client-stalled-state-test"))
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000020")
+            lateinit var fingerprint: String
 
-            responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                fingerprint = session.fingerprintValue()
+            }
+            responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
                 recordPage(
-                    vaultId = vaultId,
+                    fingerprint = fingerprint,
                     sinceRevision = 0,
                     records = "[]",
                     highestRevision = 0,
                     hasMore = true,
                 )
 
-            LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+            LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
                 val failure =
                     assertTimeoutPreemptively(Duration.ofSeconds(2)) {
                         assertFailsWith<IllegalStateException> {
@@ -476,22 +488,23 @@ class LocalVaultSyncTest {
                     }
 
                 assertTrue(failure.message!!.contains("did not advance cursor"))
-                assertEquals(0, state.lastPulledRevision(vaultId.toString()))
+                assertEquals(0, state.lastPulledRevision(fingerprint))
             }
 
             assertEquals(1, requests.size)
-            assertEquals("/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100", requests.single().path)
+            assertEquals("/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100", requests.single().path)
         }
 
     @Test
     fun publishEligibleDeviceVaultKeyPackageSendsOpaqueWrappedKey() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-package-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000003")
+            lateinit var fingerprint: String
             val crypto = DefaultCryptoService()
 
             crypto.generateDeviceKeyPair().use { device ->
-                LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+                LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                    fingerprint = session.fingerprintValue()
                     val publicKey = device.publicKey()
                     try {
                         val keyPackage =
@@ -500,7 +513,7 @@ class LocalVaultSyncTest {
                                 eligibleDevice("laptop-1", device.keyAlgorithm(), publicKey),
                             )
 
-                        assertEquals(vaultId.toString(), keyPackage.vaultId)
+                        assertEquals(fingerprint, keyPackage.fingerprint)
                         assertEquals("laptop-1", keyPackage.deviceId)
                         assertEquals("TINK_DEVICE_KEY_PACKAGE", keyPackage.keyAlgorithm)
                         assertTrue(keyPackage.vaultKeyId.isNotBlank())
@@ -513,7 +526,7 @@ class LocalVaultSyncTest {
 
             val packageRequest = requests.single()
             assertEquals("PUT", packageRequest.method)
-            assertEquals("/api/v1/vaults/$vaultId/key-packages/laptop-1", packageRequest.path)
+            assertEquals("/api/v1/vaults/$fingerprint/key-packages/laptop-1", packageRequest.path)
             assertTrue(packageRequest.body.contains(""""keyAlgorithm":""""))
             assertTrue(packageRequest.body.contains(""""encryptedVaultKey":""""))
             assertFalse(packageRequest.body.contains("master-password"))
@@ -523,19 +536,19 @@ class LocalVaultSyncTest {
     fun publishVaultKeyPackagesWrapsKeyForRegisteredServerDevices() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-package-list-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000011")
+            lateinit var fingerprint: String
             val crypto = DefaultCryptoService()
             lateinit var targetPublicKey: String
 
             crypto.generateDeviceKeyPair().use { targetDevice ->
-                targetPublicKey = java.util.Base64.getEncoder().encodeToString(targetDevice.publicKey())
+                targetPublicKey = Base64.getEncoder().encodeToString(targetDevice.publicKey())
                 responseBody =
                     """
                     [
                       {
                         "deviceId": "phone-3",
                         "keyAlgorithm": "ED25519",
-                        "publicKey": "${java.util.Base64.getEncoder().encodeToString("proof-key".encodeToByteArray())}",
+                        "publicKey": "${Base64.getEncoder().encodeToString("proof-key".encodeToByteArray())}",
                         "wrappingKeyAlgorithm": "${targetDevice.keyAlgorithm()}",
                         "wrappingPublicKey": "$targetPublicKey",
                         "createdAt": "2026-07-03T00:00:00Z",
@@ -544,7 +557,8 @@ class LocalVaultSyncTest {
                     ]
                     """.trimIndent()
 
-                LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+                LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                    fingerprint = session.fingerprintValue()
                     val count =
                         session.publishVaultKeyPackagesForRegisteredDevices(
                             KeysteadServerClient(baseUrl, "alice", "server-password"),
@@ -560,7 +574,7 @@ class LocalVaultSyncTest {
 
             val packageRequest = requests[1]
             assertEquals("PUT", packageRequest.method)
-            assertEquals("/api/v1/vaults/$vaultId/key-packages/phone-3", packageRequest.path)
+            assertEquals("/api/v1/vaults/$fingerprint/key-packages/phone-3", packageRequest.path)
             assertTrue(packageRequest.body.contains(""""keyAlgorithm":""""))
             assertTrue(packageRequest.body.contains(""""encryptedVaultKey":""""))
             assertFalse(packageRequest.body.contains("master-password"))
@@ -571,14 +585,14 @@ class LocalVaultSyncTest {
     fun bulkPackagePublicationSkipsUnverifiedRevokedAndProofOnlyDevices() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-package-eligibility-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000013")
+            lateinit var fingerprint: String
             val crypto = DefaultCryptoService()
 
             crypto.generateDeviceKeyPair().use { wrappingDevice ->
                 val wrappingPublicKey =
-                    java.util.Base64.getEncoder().encodeToString(wrappingDevice.publicKey())
+                    Base64.getEncoder().encodeToString(wrappingDevice.publicKey())
                 val proofPublicKey =
-                    java.util.Base64.getEncoder().encodeToString("proof-key".encodeToByteArray())
+                    Base64.getEncoder().encodeToString("proof-key".encodeToByteArray())
                 responseBody =
                     """
                     [
@@ -619,7 +633,8 @@ class LocalVaultSyncTest {
                     ]
                     """.trimIndent()
 
-                LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+                LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
+                    fingerprint = session.fingerprintValue()
                     assertEquals(
                         1,
                         session.publishVaultKeyPackagesForRegisteredDevices(
@@ -632,7 +647,7 @@ class LocalVaultSyncTest {
             val packageRequests = requests.filter { it.method == "PUT" }
             assertEquals(1, packageRequests.size)
             assertEquals(
-                "/api/v1/vaults/$vaultId/key-packages/eligible-phone",
+                "/api/v1/vaults/$fingerprint/key-packages/eligible-phone",
                 packageRequests.single().path,
             )
         }
@@ -641,7 +656,6 @@ class LocalVaultSyncTest {
     fun directPackagePublicationRejectsUnverifiedDeviceBeforeHttpRequest() =
         withServer { baseUrl, requests ->
             val directory = createTempDirectory("keystead-client-package-direct-gate-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000014")
             DefaultCryptoService().generateDeviceKeyPair().use { wrappingDevice ->
                 val publicKey = wrappingDevice.publicKey()
                 try {
@@ -649,8 +663,7 @@ class LocalVaultSyncTest {
                         eligibleDevice("unverified-phone", wrappingDevice.keyAlgorithm(), publicKey)
                             .copy(verifiedAt = null)
                     LocalVaultSession.openOrCreate(
-                        directory,
-                        vaultId,
+                        directory.resolve("vault.kvault"),
                         "master-password".toCharArray(),
                     ).use { session ->
                         assertFailsWith<IllegalStateException> {
@@ -673,12 +686,13 @@ class LocalVaultSyncTest {
         withServer { baseUrl, requests ->
             val sourceDirectory = createTempDirectory("keystead-client-source-test")
             val targetDirectory = createTempDirectory("keystead-client-target-test")
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000004")
+            lateinit var fingerprint: String
             val crypto = DefaultCryptoService()
 
             crypto.generateDeviceKeyPair().use { device ->
                 var exportedRecord = ""
-                LocalVaultSession.openOrCreate(sourceDirectory, vaultId, "master-password".toCharArray()).use { source ->
+                LocalVaultSession.openOrCreate(sourceDirectory.resolve("vault.kvault"), "master-password".toCharArray()).use { source ->
+                    fingerprint = source.fingerprintValue()
                     source.addLogin(
                         title = "GitHub",
                         username = "alice@example.com",
@@ -691,7 +705,7 @@ class LocalVaultSyncTest {
                     exportedRecord =
                         pushedRecord.body.replaceFirst(
                             "{",
-                            """{"vaultId":"$vaultId","secretId":"$secretId",""",
+                            """{"fingerprint":"$fingerprint","secretId":"$secretId",""",
                         )
                     requests.clear()
 
@@ -709,8 +723,9 @@ class LocalVaultSyncTest {
                         """
                         [
                           {
-                            "vaultId": "$vaultId",
+                            "fingerprint": "$fingerprint",
                             "deviceId": "phone-1",
+                            "vaultKeyId": "${keyPackage.vaultKeyId}",
                             "keyAlgorithm": "${device.keyAlgorithm()}",
                             "encryptedVaultKey": "${keyPackage.encryptedVaultKey}",
                             "createdAt": "2026-07-03T00:00:00Z",
@@ -721,15 +736,15 @@ class LocalVaultSyncTest {
                 }
 
                 LocalVaultSession.openProvisionedFromServer(
-                        targetDirectory,
-                        vaultId,
+                        targetDirectory.resolve("vault.kvault"),
+                        fingerprint,
                         deviceId = "phone-1",
                         devicePrivateKey = privateKeyCopyOf(device),
                         client = KeysteadServerClient(baseUrl, "alice", "server-password"),
                     )
                     .use { target ->
-                        responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
-                            recordPage(vaultId, 0, "[$exportedRecord]", highestRevision = 1, hasMore = false)
+                        responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
+                            recordPage(fingerprint, 0, "[$exportedRecord]", highestRevision = 1, hasMore = false)
                         assertEquals(
                             1,
                             target.pullRecordsFrom(
@@ -751,7 +766,7 @@ class LocalVaultSyncTest {
             val targetDirectory = createTempDirectory("keystead-client-target-test")
             val identityDirectory = createTempDirectory("keystead-client-device-test")
             val identityStore = DeviceIdentityStore(identityDirectory)
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000006")
+            lateinit var fingerprint: String
             lateinit var exportedRecord: String
 
             identityStore
@@ -761,7 +776,8 @@ class LocalVaultSyncTest {
             val targetIdentity =
                 identityStore.createOrLoad("phone-2", "device-passphrase".toCharArray())
             targetIdentity.use { identity ->
-                LocalVaultSession.openOrCreate(sourceDirectory, vaultId, "master-password".toCharArray()).use { source ->
+                LocalVaultSession.openOrCreate(sourceDirectory.resolve("vault.kvault"), "master-password".toCharArray()).use { source ->
+                    fingerprint = source.fingerprintValue()
                     source.addLogin(
                         title = "GitHub",
                         username = "alice@example.com",
@@ -774,7 +790,7 @@ class LocalVaultSyncTest {
                     exportedRecord =
                         pushedRecord.body.replaceFirst(
                             "{",
-                            """{"vaultId":"$vaultId","secretId":"$secretId",""",
+                            """{"fingerprint":"$fingerprint","secretId":"$secretId",""",
                         )
                     requests.clear()
 
@@ -788,8 +804,9 @@ class LocalVaultSyncTest {
                         """
                         [
                           {
-                            "vaultId": "$vaultId",
+                            "fingerprint": "$fingerprint",
                             "deviceId": "phone-2",
+                            "vaultKeyId": "${keyPackage.vaultKeyId}",
                             "keyAlgorithm": "${identity.keyAlgorithm}",
                             "encryptedVaultKey": "${keyPackage.encryptedVaultKey}",
                             "createdAt": "2026-07-03T00:00:00Z",
@@ -800,14 +817,14 @@ class LocalVaultSyncTest {
                 }
 
                 LocalVaultSession.openProvisionedFromServer(
-                        targetDirectory,
-                        vaultId,
+                        targetDirectory.resolve("vault.kvault"),
+                        fingerprint,
                         identity,
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                     )
                     .use { target ->
-                        responseByPath["/api/v1/vaults/$vaultId/records/page?sinceRevision=0&limit=100"] =
-                            recordPage(vaultId, 0, "[$exportedRecord]", highestRevision = 1, hasMore = false)
+                        responseByPath["/api/v1/vaults/$fingerprint/records/page?sinceRevision=0&limit=100"] =
+                            recordPage(fingerprint, 0, "[$exportedRecord]", highestRevision = 1, hasMore = false)
                         assertEquals(
                             1,
                             target.pullRecordsFrom(
@@ -828,7 +845,7 @@ class LocalVaultSyncTest {
             val targetDirectory = createTempDirectory("keystead-client-target-test")
             val identityDirectory = createTempDirectory("keystead-client-device-test")
             val identityStore = DeviceIdentityStore(identityDirectory)
-            val vaultId = UUID.fromString("70000000-0000-0000-0000-000000000012")
+            lateinit var fingerprint: String
 
             identityStore
                 .createOrLoad("phone-4", "device-passphrase".toCharArray())
@@ -837,7 +854,8 @@ class LocalVaultSyncTest {
             val targetIdentity =
                 identityStore.createOrLoad("phone-4", "device-passphrase".toCharArray())
             targetIdentity.use { identity ->
-                LocalVaultSession.openOrCreate(sourceDirectory, vaultId, "master-password".toCharArray()).use { source ->
+                LocalVaultSession.openOrCreate(sourceDirectory.resolve("vault.kvault"), "master-password".toCharArray()).use { source ->
+                    fingerprint = source.fingerprintValue()
                     val keyPackage =
                         source.publishVaultKeyPackage(
                             KeysteadServerClient(baseUrl, "alice", "server-password"),
@@ -848,19 +866,20 @@ class LocalVaultSyncTest {
                         """
                         [
                           {
-                            "vaultId": "$vaultId",
+                            "fingerprint": "$fingerprint",
                             "encryptedMetadata": "opaque-vault-metadata",
                             "createdAt": "2026-07-03T00:00:00Z",
                             "updatedAt": "2026-07-03T00:00:00Z"
                           }
                         ]
                         """.trimIndent()
-                    responseByPath["/api/v1/vaults/$vaultId/key-packages"] =
+                    responseByPath["/api/v1/vaults/$fingerprint/key-packages"] =
                         """
                         [
                           {
-                            "vaultId": "$vaultId",
+                            "fingerprint": "$fingerprint",
                             "deviceId": "phone-4",
+                            "vaultKeyId": "${keyPackage.vaultKeyId}",
                             "keyAlgorithm": "${identity.keyAlgorithm}",
                             "encryptedVaultKey": "${keyPackage.encryptedVaultKey}",
                             "createdAt": "2026-07-03T00:00:00Z",
@@ -872,7 +891,7 @@ class LocalVaultSyncTest {
                 requests.clear()
 
                 LocalVaultSession.openFirstProvisionedFromServer(
-                        targetDirectory,
+                        targetDirectory.resolve("vault.kvault"),
                         identity,
                         KeysteadServerClient(baseUrl, "alice", "server-password"),
                     )
@@ -882,7 +901,7 @@ class LocalVaultSyncTest {
             }
 
             assertEquals("/api/v1/vaults", requests[0].path)
-            assertEquals("/api/v1/vaults/$vaultId/key-packages", requests[1].path)
+            assertEquals("/api/v1/vaults/$fingerprint/key-packages", requests[1].path)
         }
 
     private fun eligibleDevice(
@@ -916,6 +935,54 @@ class LocalVaultSyncTest {
         } finally {
             proofPublicKey.fill(0)
             wrappingPublicKey.fill(0)
+        }
+    }
+
+    /**
+     * Provisions an empty target vault that shares [source]'s data-encryption key via a one-off
+     * device key package published to the mock server, so encrypted records pushed by [source]
+     * decrypt on the target. This replaces the v0.2 trick of deleting per-secret files from a
+     * directory vault (v2 vaults are a single file with no `secrets/` subtree).
+     */
+    private fun provisionEmptyTarget(
+        source: LocalVaultSession,
+        fingerprint: String,
+        directory: Path,
+        baseUrl: String,
+    ): LocalVaultSession {
+        val crypto = DefaultCryptoService()
+        return crypto.generateDeviceKeyPair().use { device ->
+            val publicKey = device.publicKey()
+            try {
+                val keyPackage =
+                    source.publishVaultKeyPackage(
+                        KeysteadServerClient(baseUrl, "alice", "server-password"),
+                        eligibleDevice("target-device", device.keyAlgorithm(), publicKey),
+                    )
+                responseByPath["/api/v1/vaults/$fingerprint/key-packages"] =
+                    """
+                    [
+                      {
+                        "fingerprint": "$fingerprint",
+                        "deviceId": "target-device",
+                        "vaultKeyId": "${keyPackage.vaultKeyId}",
+                        "keyAlgorithm": "${device.keyAlgorithm()}",
+                        "encryptedVaultKey": "${keyPackage.encryptedVaultKey}",
+                        "createdAt": "2026-07-03T00:00:00Z",
+                        "updatedAt": "2026-07-03T00:00:00Z"
+                      }
+                    ]
+                    """.trimIndent()
+                LocalVaultSession.openProvisionedFromServer(
+                    directory.resolve("target.kvault"),
+                    fingerprint,
+                    "target-device",
+                    privateKeyCopyOf(device),
+                    KeysteadServerClient(baseUrl, "alice", "server-password"),
+                )
+            } finally {
+                publicKey.fill(0)
+            }
         }
     }
 
@@ -961,7 +1028,7 @@ class LocalVaultSyncTest {
     )
 
     private fun recordPage(
-        vaultId: UUID,
+        fingerprint: String,
         sinceRevision: Long,
         records: String,
         highestRevision: Long,
@@ -970,7 +1037,7 @@ class LocalVaultSyncTest {
     ): String =
         """
         {
-          "vaultId": "$vaultId",
+          "fingerprint": "$fingerprint",
           "sinceRevision": $sinceRevision,
           "records": $records,
           "highestRevision": $highestRevision,

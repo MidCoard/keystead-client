@@ -4,7 +4,6 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.util.Base64
-import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,7 +17,7 @@ class CollaborativeVaultServiceTest {
             DeviceIdentityStore(directory.resolve("second")).createMemoryOnly("bob-device").use { second ->
                 DeviceIdentityStore(directory.resolve("covered")).createMemoryOnly("covered-device").use { covered ->
                     LocalVaultSession.openOrCreate(
-                        directory.resolve("vault"), UUID.randomUUID(), "master-password".toCharArray(),
+                        directory.resolve("vault"), "master-password".toCharArray(),
                     ).use { vault ->
                         val recipients = coverage(
                             first.deviceId to Base64.getEncoder().encodeToString(first.publicKey()),

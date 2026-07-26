@@ -18,7 +18,7 @@ class CollaborationViewModelTest {
         val state = CollaborationViewModel(gateway).refresh()
 
         val invitations = assertIs<CollaborationUiState.Invitations>(state)
-        assertEquals(listOf("vault-invited"), invitations.values.map { it.vaultId })
+        assertEquals(listOf("vault-invited"), invitations.values.map { it.fingerprint })
     }
 
     @Test
@@ -102,17 +102,17 @@ class CollaborationViewModelTest {
         var failure: RuntimeException? = null
 
         override fun listMemberships() = failure?.let { throw it } ?: memberships.toList()
-        override fun listMembers(vaultId: String) = members.toList()
-        override fun packageRecipients(vaultId: String) = recipients.toList()
-        override fun accept(vaultId: String) { accepted += vaultId }
-        override fun decline(vaultId: String) { declined += vaultId }
-        override fun invite(vaultId: String, userId: String, role: String) { invited += "$vaultId:$userId:$role" }
-        override fun changeRole(vaultId: String, userId: String, role: String) { roles += "$vaultId:$userId:$role" }
-        override fun remove(vaultId: String, userId: String) { removed += "$vaultId:$userId" }
+        override fun listMembers(fingerprint: String) = members.toList()
+        override fun packageRecipients(fingerprint: String) = recipients.toList()
+        override fun accept(fingerprint: String) { accepted += fingerprint }
+        override fun decline(fingerprint: String) { declined += fingerprint }
+        override fun invite(fingerprint: String, userId: String, role: String) { invited += "$fingerprint:$userId:$role" }
+        override fun changeRole(fingerprint: String, userId: String, role: String) { roles += "$fingerprint:$userId:$role" }
+        override fun remove(fingerprint: String, userId: String) { removed += "$fingerprint:$userId" }
     }
 
-    private fun membership(vaultId: String, state: ServerVaultMemberState) = ServerVaultMembership(
-        vaultId, "owner", "opaque", "EDITOR", state, "key-1",
+    private fun membership(fingerprint: String, state: ServerVaultMemberState) = ServerVaultMembership(
+        fingerprint, "owner", "opaque", "EDITOR", state, "key-1",
         ServerVaultKeyLifecycleState.STABLE, 1,
     )
 

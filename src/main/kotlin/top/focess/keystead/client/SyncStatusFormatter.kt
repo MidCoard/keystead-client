@@ -16,9 +16,9 @@ object SyncStatusFormatter {
     }
 
     private fun targetPrefix(error: KeysteadRevisionConflictException): String {
-        val vaultId = error.vaultId
+        val fingerprint = error.fingerprint
         val secretId = error.secretId
-        if (vaultId == null || secretId == null) {
+        if (fingerprint == null || secretId == null) {
             return ""
         }
         val state =
@@ -28,6 +28,6 @@ object SyncStatusFormatter {
                 " has a newer server copy"
             }
         val updatedAt = error.serverUpdatedAt?.let { " at $it" } ?: ""
-        return "Secret $secretId in vault $vaultId$state$updatedAt. "
+        return "Secret $secretId in vault $fingerprint$state$updatedAt. "
     }
 }

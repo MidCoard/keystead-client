@@ -4,11 +4,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Base64
 import java.util.Comparator
-import java.util.UUID
 import top.focess.keystead.memory.SecretBuffer
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.KeyId
-import top.focess.keystead.model.VaultId
+import top.focess.keystead.model.VaultFingerprint
 import top.focess.keystead.recovery.DefaultRecoveryCryptoService
 import top.focess.keystead.recovery.RecoveryCryptoService
 import top.focess.keystead.recovery.RecoveryKit
@@ -16,7 +15,6 @@ import top.focess.keystead.recovery.RecoveryKitCodec
 import top.focess.keystead.recovery.RecoveryVaultKeyPackage
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.DeviceVaultKeyPackage
-import top.focess.keystead.store.FileVaultStore
 
 /** Mirrors the canonical recovery-kit size cap enforced by core's codec. */
 private const val MAX_ENCODED_KIT_CHARACTERS = 512
@@ -73,19 +71,19 @@ class OfflineRecoveryWorkflow(
                 material.vaultPackages.forEach { value ->
                     val encryptedRecoveryKey = Base64.getDecoder().decode(value.encryptedVaultKey)
                     val recoveryPackage = RecoveryVaultKeyPackage(
-                        username, value.vaultId, KeyId(value.vaultKeyId), value.enrollmentId,
+                        username, value.fingerprint, KeyId(value.vaultKeyId), value.enrollmentId,
                         value.generation, value.keyAlgorithm, encryptedRecoveryKey,
                     )
                     Wipe.wipe(encryptedRecoveryKey)
-                    val temporaryDirectory = transientRoot.resolve(value.vaultId)
-                    val service = DefaultVaultService(FileVaultStore(temporaryDirectory))
-                    crypto.openVault(service, VaultId(UUID.fromString(value.vaultId)), recoveryPackage, kit, encryptedPrivateKey).use { handle ->
-                        val context = LocalVaultSession.vaultKeyPackageContext(value.vaultId, identity.deviceId)
+                    val temporaryFile = transientRoot.resolve("${value.fingerprint}.kvault")
+                    val service = DefaultVaultService()
+                    crypto.openVault(service, temporaryFile, recoveryPackage, kit, encryptedPrivateKey).use { handle ->
+                        val context = LocalVaultSession.vaultKeyPackageContext(value.fingerprint, identity.deviceId)
                         val devicePackage = try { handle.wrapVaultKeyPackageForDevice(devicePublicKey, context) } finally { Wipe.wipe(context) }
                         val encryptedDeviceKey = devicePackage.encryptedVaultKey()
                         try {
                             packages += RecoveryCompletionVaultPackage(
-                                value.vaultId, devicePackage.vaultKeyId().value(), devicePackage.keyAlgorithm(),
+                                value.fingerprint, devicePackage.vaultKeyId().value(), devicePackage.keyAlgorithm(),
                                 Base64.getEncoder().encodeToString(encryptedDeviceKey),
                             )
                         } finally { Wipe.wipe(encryptedDeviceKey) }
@@ -109,17 +107,23 @@ class OfflineRecoveryWorkflow(
     ) {
         val privateKey = identity.privateKey()
         try {
+            Files.createDirectories(root)
             packages.forEach { value ->
-                val directory = root.resolve(value.vaultId)
-                check(!Files.exists(directory.resolve("vault.properties"))) {
+                val realFile = root.resolve("${value.fingerprint}.kvault")
+                check(!Files.exists(realFile)) {
                     "Recovered vault already exists locally"
                 }
                 val encrypted = Base64.getDecoder().decode(value.encryptedVaultKey)
-                val context = LocalVaultSession.vaultKeyPackageContext(value.vaultId, identity.deviceId)
+                val context = LocalVaultSession.vaultKeyPackageContext(value.fingerprint, identity.deviceId)
                 try {
-                    DefaultVaultService(FileVaultStore(directory)).provisionVault(
-                        VaultId(UUID.fromString(value.vaultId)),
-                        DeviceVaultKeyPackage(KeyId(value.vaultKeyId), value.keyAlgorithm, encrypted),
+                    DefaultVaultService().provisionVault(
+                        realFile,
+                        DeviceVaultKeyPackage(
+                            VaultFingerprint.fromHexString(value.fingerprint),
+                            KeyId(value.vaultKeyId),
+                            value.keyAlgorithm,
+                            encrypted,
+                        ),
                         privateKey,
                         context,
                     ).close()

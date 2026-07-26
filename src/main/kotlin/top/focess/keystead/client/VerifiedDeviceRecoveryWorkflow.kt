@@ -25,12 +25,12 @@ class VerifiedDeviceRecoveryWorkflow(client: KeysteadServerClient) {
                 require(decoded.wrappingKeyAlgorithm() == DefaultCryptoService.DEVICE_KEY_ALGORITHM) {
                     "Replacement device wrapping algorithm is unsupported"
                 }
-                val context = LocalVaultSession.vaultKeyPackageContext(vault.vaultIdValue(), decoded.deviceId())
+                val context = LocalVaultSession.vaultKeyPackageContext(vault.fingerprintValue(), decoded.deviceId())
                 val wrapped = try { vault.wrapCurrentVaultKey(publicKey, context) } finally { Wipe.wipe(context) }
                 val encrypted = wrapped.encryptedVaultKey()
                 try {
                     packages += RecoveryCompletionVaultPackage(
-                        vault.vaultIdValue(), wrapped.vaultKeyId().value(), wrapped.keyAlgorithm(),
+                        vault.fingerprintValue(), wrapped.vaultKeyId().value(), wrapped.keyAlgorithm(),
                         Base64.getEncoder().encodeToString(encrypted),
                     )
                 } finally { Wipe.wipe(encrypted) }

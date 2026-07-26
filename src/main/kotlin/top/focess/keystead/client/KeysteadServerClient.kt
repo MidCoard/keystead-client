@@ -41,7 +41,7 @@ data class ServerEncryptedRecord(
 )
 
 data class ServerEncryptedRecordPage(
-    val vaultId: String,
+    val fingerprint: String,
     val sinceRevision: Long,
     val records: List<ServerEncryptedRecord>,
     val highestRevision: Long,
@@ -126,7 +126,7 @@ private val supportedDeviceWrappingAlgorithms =
     setOf("RSA_OAEP_SHA256", DefaultCryptoService.DEVICE_KEY_ALGORITHM)
 
 data class ServerVaultKeyPackage(
-    val vaultId: String,
+    val fingerprint: String,
     val deviceId: String,
     val vaultKeyId: String = "legacy",
     val keyAlgorithm: String,
@@ -146,7 +146,7 @@ data class ServerAutomationVaultKeyPackage(
 )
 
 data class ServerVault(
-    val vaultId: String,
+    val fingerprint: String,
     val encryptedMetadata: String,
 )
 
@@ -159,7 +159,7 @@ class KeysteadRevisionConflictException(
     message: String = defaultRevisionConflictMessage,
     val latestRevision: Long? = null,
     val rejectedRevision: Long? = null,
-    val vaultId: String? = null,
+    val fingerprint: String? = null,
     val secretId: String? = null,
     val serverRevision: Long? = null,
     val clientRevision: Long? = null,
@@ -249,9 +249,9 @@ class KeysteadServerClient private constructor(
         sendExpectingSuccess(request) { KeysteadAccountConflictException() }
     }
 
-    fun putVault(vaultId: String, encryptedMetadata: String) {
+    fun putVault(fingerprint: String, encryptedMetadata: String) {
         val request =
-            HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId))
+            HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint))
                 .header("Authorization", authorization.headerValue())
                 .header("Content-Type", "application/json")
                 .PUT(
@@ -275,9 +275,9 @@ class KeysteadServerClient private constructor(
         return parseVaults(response.body())
     }
 
-    fun putRecord(vaultId: String, secretId: String, record: ServerEncryptedRecord) {
+    fun putRecord(fingerprint: String, secretId: String, record: ServerEncryptedRecord) {
         val request =
-            HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId, "records", secretId))
+            HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint, "records", secretId))
                 .header("Authorization", authorization.headerValue())
                 .header("Content-Type", "application/json")
                 .PUT(HttpRequest.BodyPublishers.ofString(record.toJson()))
@@ -286,14 +286,14 @@ class KeysteadServerClient private constructor(
         sendExpectingSuccess(request)
     }
 
-    fun deleteRecord(vaultId: String, secretId: String, revision: Long) {
+    fun deleteRecord(fingerprint: String, secretId: String, revision: Long) {
         val request =
             HttpRequest.newBuilder(
                     endpoint(
                         "api",
                         "v1",
                         "vaults",
-                        vaultId,
+                        fingerprint,
                         "records",
                         secretId,
                         query = "revision=$revision",
@@ -306,14 +306,14 @@ class KeysteadServerClient private constructor(
         sendExpectingSuccess(request)
     }
 
-    fun listRecords(vaultId: String, sinceRevision: Long): List<ServerEncryptedRecord> {
+    fun listRecords(fingerprint: String, sinceRevision: Long): List<ServerEncryptedRecord> {
         val request =
             HttpRequest.newBuilder(
                     endpoint(
                         "api",
                         "v1",
                         "vaults",
-                        vaultId,
+                        fingerprint,
                         "records",
                         query = "sinceRevision=$sinceRevision",
                     ),
@@ -327,7 +327,7 @@ class KeysteadServerClient private constructor(
     }
 
     fun listRecordPage(
-        vaultId: String,
+        fingerprint: String,
         sinceRevision: Long,
         limit: Int,
     ): ServerEncryptedRecordPage {
@@ -337,7 +337,7 @@ class KeysteadServerClient private constructor(
                         "api",
                         "v1",
                         "vaults",
-                        vaultId,
+                        fingerprint,
                         "records",
                         "page",
                         query = "sinceRevision=$sinceRevision&limit=$limit",
@@ -407,10 +407,10 @@ class KeysteadServerClient private constructor(
         sendExpectingSuccess(request) { lifecycleConflict() }
     }
 
-    fun putVaultKeyPackage(vaultId: String, deviceId: String, keyPackage: ServerVaultKeyPackage) {
+    fun putVaultKeyPackage(fingerprint: String, deviceId: String, keyPackage: ServerVaultKeyPackage) {
         val request =
             HttpRequest.newBuilder(
-                    endpoint("api", "v1", "vaults", vaultId, "key-packages", deviceId),
+                    endpoint("api", "v1", "vaults", fingerprint, "key-packages", deviceId),
                 )
                 .header("Authorization", authorization.headerValue())
                 .header("Content-Type", "application/json")
@@ -421,13 +421,13 @@ class KeysteadServerClient private constructor(
     }
 
     fun putRecipientVaultKeyPackage(
-        vaultId: String,
+        fingerprint: String,
         recipientId: String,
         deviceId: String,
         keyPackage: ServerVaultKeyPackage,
     ) {
         val request = HttpRequest.newBuilder(
-            endpoint("api", "v1", "vaults", vaultId, "key-packages", "recipients", recipientId, "devices", deviceId),
+            endpoint("api", "v1", "vaults", fingerprint, "key-packages", "recipients", recipientId, "devices", deviceId),
         ).header("Authorization", authorization.headerValue())
             .header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString(keyPackage.toJson()))
@@ -435,9 +435,9 @@ class KeysteadServerClient private constructor(
         sendExpectingSuccess(request)
     }
 
-    fun listVaultKeyPackages(vaultId: String): List<ServerVaultKeyPackage> {
+    fun listVaultKeyPackages(fingerprint: String): List<ServerVaultKeyPackage> {
         val request =
-            HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId, "key-packages"))
+            HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint, "key-packages"))
                 .header("Authorization", authorization.headerValue())
                 .GET()
                 .build()
@@ -446,32 +446,32 @@ class KeysteadServerClient private constructor(
         return parseKeyPackages(response.body())
     }
 
-    fun rotateVaultKey(vaultId: String, vaultKeyId: String) {
-        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId, "key-rotation"))
+    fun rotateVaultKey(fingerprint: String, vaultKeyId: String) {
+        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint, "key-rotation"))
             .header("Authorization", authorization.headerValue()).header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString("""{"vaultKeyId":"${vaultKeyId.json()}"}"""))
             .build()
         sendExpectingSuccess(request)
     }
 
-    fun putAutomationPrincipal(vaultId: String, principal: ServerAutomationPrincipal) {
-        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId, "automation-principals", principal.principalId))
+    fun putAutomationPrincipal(fingerprint: String, principal: ServerAutomationPrincipal) {
+        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint, "automation-principals", principal.principalId))
             .header("Authorization", authorization.headerValue()).header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString("""{"publicKeyAlgorithm":"${principal.publicKeyAlgorithm.json()}","publicKey":"${principal.publicKey.json()}"}"""))
             .build()
         sendExpectingSuccess(request)
     }
 
-    fun putAutomationVaultKeyPackage(vaultId: String, principalId: String, keyPackage: ServerAutomationVaultKeyPackage) {
-        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId, "automation-principals", principalId, "key-package"))
+    fun putAutomationVaultKeyPackage(fingerprint: String, principalId: String, keyPackage: ServerAutomationVaultKeyPackage) {
+        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint, "automation-principals", principalId, "key-package"))
             .header("Authorization", authorization.headerValue()).header("Content-Type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString("""{"vaultKeyId":"${keyPackage.vaultKeyId.json()}","keyAlgorithm":"${keyPackage.keyAlgorithm.json()}","encryptedVaultKey":"${keyPackage.encryptedVaultKey.json()}"}"""))
             .build()
         sendExpectingSuccess(request)
     }
 
-    fun revokeAutomationPrincipal(vaultId: String, principalId: String) {
-        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", vaultId, "automation-principals", principalId))
+    fun revokeAutomationPrincipal(fingerprint: String, principalId: String) {
+        val request = HttpRequest.newBuilder(endpoint("api", "v1", "vaults", fingerprint, "automation-principals", principalId))
             .header("Authorization", authorization.headerValue()).DELETE().build()
         sendExpectingSuccess(request)
     }
@@ -506,7 +506,7 @@ class KeysteadServerClient private constructor(
             message = jsonStringOrNull(body, "message") ?: defaultRevisionConflictMessage,
             latestRevision = jsonLongOrNull(body, "latestRevision"),
             rejectedRevision = jsonLongOrNull(body, "rejectedRevision"),
-            vaultId = jsonStringOrNull(body, "vaultId"),
+            fingerprint = jsonStringOrNull(body, "fingerprint"),
             secretId = jsonStringOrNull(body, "secretId"),
             serverRevision = jsonLongOrNull(body, "serverRevision"),
             clientRevision = jsonLongOrNull(body, "clientRevision"),
@@ -586,7 +586,7 @@ class KeysteadServerClient private constructor(
                 ?.get(1)
                 ?: throw IllegalStateException("Server record page is missing records")
         return ServerEncryptedRecordPage(
-            vaultId = jsonString(body, "vaultId"),
+            fingerprint = jsonString(body, "fingerprint"),
             sinceRevision = jsonLong(body, "sinceRevision"),
             records = parseRecords(recordsBody),
             highestRevision = jsonLong(body, "highestRevision"),
@@ -604,7 +604,7 @@ class KeysteadServerClient private constructor(
             .asSequence()
             .map { json ->
                 ServerVault(
-                    vaultId = jsonString(json, "vaultId"),
+                    fingerprint = jsonString(json, "fingerprint"),
                     encryptedMetadata = jsonString(json, "encryptedMetadata"),
                 )
             }
@@ -652,7 +652,7 @@ class KeysteadServerClient private constructor(
             .asSequence()
             .map { json ->
                 ServerVaultKeyPackage(
-                    vaultId = jsonString(json, "vaultId"),
+                    fingerprint = jsonString(json, "fingerprint"),
                     deviceId = jsonString(json, "deviceId"),
                     vaultKeyId = jsonStringOrNull(json, "vaultKeyId") ?: "legacy",
                     keyAlgorithm = jsonString(json, "keyAlgorithm"),

@@ -46,7 +46,7 @@ class RecoveryEnrollmentWorkflow(
                     recovery.putVaultPackage(
                         username,
                         ServerRecoveryVaultPackage(
-                            enrollmentId, generation, wrapped.vaultId(), wrapped.vaultKeyId().value(),
+                            enrollmentId, generation, wrapped.fingerprint(), wrapped.vaultKeyId().value(),
                             wrapped.keyAlgorithm(), Base64.getEncoder().encodeToString(encryptedVaultKey),
                         ),
                     )

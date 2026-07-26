@@ -41,11 +41,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun UnlockScreen(
     vaultDirectory: String,
-    vaultId: String,
     masterPassword: String,
     errorMessage: String?,
     onVaultDirectoryChange: (String) -> Unit,
-    onVaultIdChange: (String) -> Unit,
     onMasterPasswordChange: (String) -> Unit,
     onOpen: () -> Unit,
 ) {
@@ -127,20 +125,14 @@ fun UnlockScreen(
                     OutlinedTextField(
                         vaultDirectory,
                         onVaultDirectoryChange,
-                        label = { Text("Vault folder") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        vaultId,
-                        onVaultIdChange,
-                        label = { Text("Vault ID") },
+                        label = { Text("Vault file") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "One vault per folder. To create a new vault, choose an empty folder; " +
-                            "the vault ID identifies the vault inside it and usually stays as-is.",
+                        "One vault per file. To create a new vault, choose a path that does not yet " +
+                            "exist; the vault fingerprint is derived from your master password, so you " +
+                            "never need to type it.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )

@@ -9,27 +9,27 @@ class VaultRotationClient(private val client: KeysteadServerClient) {
     fun listMemberships(): List<ServerVaultMembership> =
         array(client.exchange("GET", listOf("api", "v1", "vaults")), membershipFields).map { value ->
             ServerVaultMembership(
-                value.string("vaultId"), value.string("ownerId"), value.string("encryptedMetadata"), value.string("role"),
+                value.string("fingerprint"), value.string("ownerId"), value.string("encryptedMetadata"), value.string("role"),
                 ServerVaultMemberState.valueOf(value.string("membershipState")), value.nullableString("currentVaultKeyId"),
                 ServerVaultKeyLifecycleState.valueOf(value.string("keyLifecycleState")), value.long("lifecycleVersion"),
             )
         }
 
-    fun accept(vaultId: String) { success(client.exchange("POST", listOf("api", "v1", "vaults", vaultId, "members", "accept"))) }
-    fun decline(vaultId: String) { success(client.exchange("POST", listOf("api", "v1", "vaults", vaultId, "members", "decline"))) }
+    fun accept(fingerprint: String) { success(client.exchange("POST", listOf("api", "v1", "vaults", fingerprint, "members", "accept"))) }
+    fun decline(fingerprint: String) { success(client.exchange("POST", listOf("api", "v1", "vaults", fingerprint, "members", "decline"))) }
 
-    fun listMembers(vaultId: String): List<ServerVaultMember> =
-        array(client.exchange("GET", listOf("api", "v1", "vaults", vaultId, "members")), memberFields).map { value ->
-            ServerVaultMember(value.string("vaultId"), value.string("userId"), value.string("role"), ServerVaultMemberState.valueOf(value.string("state")), Instant.parse(value.string("createdAt")), Instant.parse(value.string("updatedAt")))
+    fun listMembers(fingerprint: String): List<ServerVaultMember> =
+        array(client.exchange("GET", listOf("api", "v1", "vaults", fingerprint, "members")), memberFields).map { value ->
+            ServerVaultMember(value.string("fingerprint"), value.string("userId"), value.string("role"), ServerVaultMemberState.valueOf(value.string("state")), Instant.parse(value.string("createdAt")), Instant.parse(value.string("updatedAt")))
         }
 
-    fun invite(vaultId: String, userId: String, role: String) = memberWrite("PUT", vaultId, userId, null, role)
-    fun changeRole(vaultId: String, userId: String, role: String) = memberWrite("PUT", vaultId, userId, "role", role)
-    fun remove(vaultId: String, userId: String) { success(client.exchange("DELETE", listOf("api", "v1", "vaults", vaultId, "members", userId))) }
+    fun invite(fingerprint: String, userId: String, role: String) = memberWrite("PUT", fingerprint, userId, null, role)
+    fun changeRole(fingerprint: String, userId: String, role: String) = memberWrite("PUT", fingerprint, userId, "role", role)
+    fun remove(fingerprint: String, userId: String) { success(client.exchange("DELETE", listOf("api", "v1", "vaults", fingerprint, "members", userId))) }
 
-    fun packageRecipients(vaultId: String): List<ServerVaultRecipientDevice> {
+    fun packageRecipients(fingerprint: String): List<ServerVaultRecipientDevice> {
         val coverage = obj(
-            success(client.exchange("GET", listOf("api", "v1", "vaults", vaultId, "package-recipients"))),
+            success(client.exchange("GET", listOf("api", "v1", "vaults", fingerprint, "package-recipients"))),
             coverageFields,
         )
         coverage.nullableString("currentVaultKeyId")
@@ -43,33 +43,33 @@ class VaultRotationClient(private val client: KeysteadServerClient) {
         }
     }
 
-    fun begin(vaultId: String, expectedKeyId: String, targetKeyId: String, lifecycleVersion: Long, selectedPendingUsers: Set<String> = emptySet()): ServerVaultRotation {
+    fun begin(fingerprint: String, expectedKeyId: String, targetKeyId: String, lifecycleVersion: Long, selectedPendingUsers: Set<String> = emptySet()): ServerVaultRotation {
         val users = selectedPendingUsers.sorted().joinToString(",") { "\"${it.clientJson()}\"" }
-        return rotation(success(client.exchange("POST", listOf("api", "v1", "vaults", vaultId, "rotations"), body = "{\"expectedCurrentVaultKeyId\":\"${expectedKeyId.clientJson()}\",\"targetVaultKeyId\":\"${targetKeyId.clientJson()}\",\"expectedLifecycleVersion\":$lifecycleVersion,\"selectedPendingUsers\":[$users]}")))
+        return rotation(success(client.exchange("POST", listOf("api", "v1", "vaults", fingerprint, "rotations"), body = "{\"expectedCurrentVaultKeyId\":\"${expectedKeyId.clientJson()}\",\"targetVaultKeyId\":\"${targetKeyId.clientJson()}\",\"expectedLifecycleVersion\":$lifecycleVersion,\"selectedPendingUsers\":[$users]}")))
     }
 
-    fun status(vaultId: String, generationId: String): ServerVaultRotation = rotation(success(client.exchange("GET", listOf("api", "v1", "vaults", vaultId, "rotations", generationId))))
+    fun status(fingerprint: String, generationId: String): ServerVaultRotation = rotation(success(client.exchange("GET", listOf("api", "v1", "vaults", fingerprint, "rotations", generationId))))
 
-    fun upload(vaultId: String, generationId: String, target: ServerVaultRotationTarget, vaultKeyId: String, encryptedVaultKey: String): ServerVaultRotation {
+    fun upload(fingerprint: String, generationId: String, target: ServerVaultRotationTarget, vaultKeyId: String, encryptedVaultKey: String): ServerVaultRotation {
         val body = JsonObject().apply {
             addProperty("vaultKeyId", vaultKeyId); addProperty("targetType", target.targetType.name)
             nullable("recipientId", target.recipientId); nullable("deviceId", target.deviceId); nullable("principalId", target.principalId); nullable("enrollmentId", target.enrollmentId)
             if (target.recoveryGeneration == null) add("recoveryGeneration", com.google.gson.JsonNull.INSTANCE) else addProperty("recoveryGeneration", target.recoveryGeneration)
             addProperty("keyAlgorithm", target.keyAlgorithm); addProperty("encryptedVaultKey", encryptedVaultKey)
         }
-        return rotation(success(client.exchange("PUT", listOf("api", "v1", "vaults", vaultId, "rotations", generationId, "targets", target.targetId, "package"), body = body.toString())))
+        return rotation(success(client.exchange("PUT", listOf("api", "v1", "vaults", fingerprint, "rotations", generationId, "targets", target.targetId, "package"), body = body.toString())))
     }
 
-    fun selfPackage(vaultId: String, generationId: String, deviceId: String): ServerRotationPackage {
-        val value = obj(success(client.exchange("GET", listOf("api", "v1", "vaults", vaultId, "rotations", generationId, "self-package"), query = "deviceId=${clientQuery(deviceId)}")), packageFields)
+    fun selfPackage(fingerprint: String, generationId: String, deviceId: String): ServerRotationPackage {
+        val value = obj(success(client.exchange("GET", listOf("api", "v1", "vaults", fingerprint, "rotations", generationId, "self-package"), query = "deviceId=${clientQuery(deviceId)}")), packageFields)
         return ServerRotationPackage(value.string("targetId"), value.string("vaultKeyId"), value.string("keyAlgorithm"), value.string("encryptedVaultKey"))
     }
 
-    fun cancel(vaultId: String, generationId: String) { success(client.exchange("DELETE", listOf("api", "v1", "vaults", vaultId, "rotations", generationId))) }
-    fun commit(vaultId: String, generationId: String): ServerVaultRotation = rotation(success(client.exchange("POST", listOf("api", "v1", "vaults", vaultId, "rotations", generationId, "commit"))))
+    fun cancel(fingerprint: String, generationId: String) { success(client.exchange("DELETE", listOf("api", "v1", "vaults", fingerprint, "rotations", generationId))) }
+    fun commit(fingerprint: String, generationId: String): ServerVaultRotation = rotation(success(client.exchange("POST", listOf("api", "v1", "vaults", fingerprint, "rotations", generationId, "commit"))))
 
-    private fun memberWrite(method: String, vaultId: String, userId: String, suffix: String?, role: String) {
-        val path = mutableListOf("api", "v1", "vaults", vaultId, "members", userId); suffix?.let(path::add)
+    private fun memberWrite(method: String, fingerprint: String, userId: String, suffix: String?, role: String) {
+        val path = mutableListOf("api", "v1", "vaults", fingerprint, "members", userId); suffix?.let(path::add)
         success(client.exchange(method, path, body = "{\"role\":\"${role.clientJson()}\"}"))
     }
 
@@ -77,7 +77,7 @@ class VaultRotationClient(private val client: KeysteadServerClient) {
         val value = obj(body, rotationFields)
         val targets = value.getAsJsonArray("targets") ?: error("Server rotation is missing targets")
         return ServerVaultRotation(
-            value.string("generationId"), value.string("vaultId"), value.string("sourceVaultKeyId"), value.string("targetVaultKeyId"),
+            value.string("generationId"), value.string("fingerprint"), value.string("sourceVaultKeyId"), value.string("targetVaultKeyId"),
             ServerVaultRotationState.valueOf(value.string("state")), value.long("lifecycleVersion"),
             targets.map { element ->
                 val target = strict(element, targetFields)
@@ -110,11 +110,11 @@ class VaultRotationClient(private val client: KeysteadServerClient) {
     private fun invalid(): Nothing = throw IllegalStateException("Server returned invalid collaboration JSON")
 
     private companion object {
-        val membershipFields = setOf("vaultId", "ownerId", "encryptedMetadata", "role", "membershipState", "currentVaultKeyId", "keyLifecycleState", "lifecycleVersion")
-        val memberFields = setOf("vaultId", "userId", "role", "state", "createdAt", "updatedAt")
+        val membershipFields = setOf("fingerprint", "ownerId", "encryptedMetadata", "role", "membershipState", "currentVaultKeyId", "keyLifecycleState", "lifecycleVersion")
+        val memberFields = setOf("fingerprint", "userId", "role", "state", "createdAt", "updatedAt")
         val recipientFields = setOf("userId", "role", "memberState", "deviceId", "keyAlgorithm", "publicKey", "covered")
         val coverageFields = setOf("currentVaultKeyId", "keyLifecycleState", "lifecycleVersion", "devices")
-        val rotationFields = setOf("generationId", "vaultId", "sourceVaultKeyId", "targetVaultKeyId", "state", "lifecycleVersion", "targets")
+        val rotationFields = setOf("generationId", "fingerprint", "sourceVaultKeyId", "targetVaultKeyId", "state", "lifecycleVersion", "targets")
         val targetFields = setOf("targetId", "targetType", "recipientId", "deviceId", "principalId", "enrollmentId", "recoveryGeneration", "keyAlgorithm", "publicKey", "required", "covered")
         val packageFields = setOf("targetId", "vaultKeyId", "keyAlgorithm", "encryptedVaultKey")
     }

@@ -29,7 +29,7 @@ class SyncStatusFormatterTest {
                     message = "Record revision must increase",
                     latestRevision = 8,
                     rejectedRevision = 7,
-                    vaultId = "vault-1",
+                    fingerprint = "vault-1",
                     secretId = "secret-1",
                     serverRevision = 9,
                     clientRevision = 6,

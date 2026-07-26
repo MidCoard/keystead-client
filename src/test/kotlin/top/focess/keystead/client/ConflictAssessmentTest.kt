@@ -12,7 +12,7 @@ class ConflictAssessmentTest {
     fun serverDeletedConflictIsNotAutoRecoverable() {
         val error =
             KeysteadRevisionConflictException(
-                vaultId = "vault-1",
+                fingerprint = "vault-1",
                 secretId = "secret-1",
                 serverDeleted = true,
                 serverUpdatedAt = "2026-07-22T00:00:00Z",
@@ -28,7 +28,7 @@ class ConflictAssessmentTest {
     fun newerRevisionConflictIsAutoRecoverable() {
         val error =
             KeysteadRevisionConflictException(
-                vaultId = "vault-1",
+                fingerprint = "vault-1",
                 secretId = "secret-1",
                 serverRevision = 9,
                 clientRevision = 7,

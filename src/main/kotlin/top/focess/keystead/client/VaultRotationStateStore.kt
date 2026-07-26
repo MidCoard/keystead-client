@@ -9,7 +9,7 @@ import java.util.Properties
 enum class LocalRotationStage { PACKAGING, PACKAGED, LOCAL_COMMITTED }
 
 data class LocalRotationState(
-    val vaultId: String,
+    val fingerprint: String,
     val generationId: String,
     val sourceVaultKeyId: String,
     val targetVaultKeyId: String,
@@ -22,7 +22,7 @@ class VaultRotationStateStore(private val file: Path) {
     fun save(state: LocalRotationState) {
         Files.createDirectories(file.toAbsolutePath().parent)
         val temporary = file.resolveSibling(".${file.fileName}.tmp")
-        val body = "vaultId=${state.vaultId}\ngenerationId=${state.generationId}\nsourceVaultKeyId=${state.sourceVaultKeyId}\ntargetVaultKeyId=${state.targetVaultKeyId}\ndeviceId=${state.deviceId}\nstage=${state.stage.name}\n"
+        val body = "fingerprint=${state.fingerprint}\ngenerationId=${state.generationId}\nsourceVaultKeyId=${state.sourceVaultKeyId}\ntargetVaultKeyId=${state.targetVaultKeyId}\ndeviceId=${state.deviceId}\nstage=${state.stage.name}\n"
         Files.writeString(temporary, body)
         Files.move(temporary, file, ATOMIC_MOVE, REPLACE_EXISTING)
     }
@@ -32,7 +32,7 @@ class VaultRotationStateStore(private val file: Path) {
         if (!Files.exists(file)) return null
         val values = Properties().also { Files.newInputStream(file).use(it::load) }
         return LocalRotationState(
-            values.required("vaultId"), values.required("generationId"),
+            values.required("fingerprint"), values.required("generationId"),
             values.required("sourceVaultKeyId"), values.required("targetVaultKeyId"),
             values.required("deviceId"), LocalRotationStage.valueOf(values.required("stage")),
         )

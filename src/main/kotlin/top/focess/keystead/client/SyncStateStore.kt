@@ -7,29 +7,29 @@ import java.util.Properties
 class SyncStateStore(private val directory: Path) {
     private val stateFile = directory.resolve("sync-state.properties")
 
-    fun lastPushedRevision(vaultId: String): Long = revision(vaultId, "pushed")
+    fun lastPushedRevision(fingerprint: String): Long = revision(fingerprint, "pushed")
 
-    fun lastPulledRevision(vaultId: String): Long = revision(vaultId, "pulled")
+    fun lastPulledRevision(fingerprint: String): Long = revision(fingerprint, "pulled")
 
-    fun recordPushed(vaultId: String, revision: Long) {
-        record(vaultId, "pushed", revision)
+    fun recordPushed(fingerprint: String, revision: Long) {
+        record(fingerprint, "pushed", revision)
     }
 
-    fun recordPulled(vaultId: String, revision: Long) {
-        record(vaultId, "pulled", revision)
+    fun recordPulled(fingerprint: String, revision: Long) {
+        record(fingerprint, "pulled", revision)
     }
 
-    private fun revision(vaultId: String, direction: String): Long =
-        load().getProperty(key(vaultId, direction))?.toLongOrNull() ?: 0L
+    private fun revision(fingerprint: String, direction: String): Long =
+        load().getProperty(key(fingerprint, direction))?.toLongOrNull() ?: 0L
 
-    private fun record(vaultId: String, direction: String, revision: Long) {
+    private fun record(fingerprint: String, direction: String, revision: Long) {
         require(revision >= 0) { "Sync revision must not be negative" }
         val properties = load()
-        val current = properties.getProperty(key(vaultId, direction))?.toLongOrNull() ?: 0L
+        val current = properties.getProperty(key(fingerprint, direction))?.toLongOrNull() ?: 0L
         if (revision < current) {
             return
         }
-        properties.setProperty(key(vaultId, direction), revision.toString())
+        properties.setProperty(key(fingerprint, direction), revision.toString())
         Files.createDirectories(directory)
         Files.newOutputStream(stateFile).use { output ->
             properties.store(output, "Keystead sync state")
@@ -44,6 +44,6 @@ class SyncStateStore(private val directory: Path) {
         return properties
     }
 
-    private fun key(vaultId: String, direction: String): String =
-        "vault.$vaultId.last${direction.replaceFirstChar { it.uppercase() }}Revision"
+    private fun key(fingerprint: String, direction: String): String =
+        "vault.$fingerprint.last${direction.replaceFirstChar { it.uppercase() }}Revision"
 }

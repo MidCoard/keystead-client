@@ -4,7 +4,6 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Path
 import java.util.Base64
-import java.util.UUID
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -45,9 +44,8 @@ class LocalVaultSessionTest {
     @Test
     fun addRevealAndDeleteLogin() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000001")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             val id =
                 session.addLogin(
                     title = "GitHub",
@@ -73,13 +71,12 @@ class LocalVaultSessionTest {
     @Test
     fun reopenExistingVaultKeepsSavedLogin() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000002")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             session.addLogin("GitHub", "alice@example.com", "secret-password", "https://github.com")
         }
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             assertEquals(listOf("GitHub"), session.listLogins().map { it.title })
         }
     }
@@ -87,9 +84,8 @@ class LocalVaultSessionTest {
     @Test
     fun addRevealAndDeleteStructuredDeveloperSecret() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000003")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             val id =
                 session.addStructuredSecret(
                     type = SecretType.SSH_KEY,
@@ -123,9 +119,8 @@ class LocalVaultSessionTest {
     @Test
     fun updateLoginReplacesPasswordInSameRecord() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000004")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             val id =
                 session.addLogin(
                     title = "GitHub",
@@ -150,9 +145,8 @@ class LocalVaultSessionTest {
     @Test
     fun updateStructuredSecretReplacesFieldsInSameRecord() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000005")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             val id =
                 session.addStructuredSecret(
                     type = SecretType.API_TOKEN,
@@ -183,9 +177,8 @@ class LocalVaultSessionTest {
     @Test
     fun editSnapshotLoadsLoginFormValues() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000006")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             val id =
                 session.addLogin(
                     title = "GitHub",
@@ -214,9 +207,8 @@ class LocalVaultSessionTest {
     @Test
     fun editSnapshotLoadsStructuredFormValues() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000007")
 
-        LocalVaultSession.openOrCreate(directory, vaultId, "master-password".toCharArray()).use { session ->
+        LocalVaultSession.openOrCreate(directory.resolve("vault.kvault"), "master-password".toCharArray()).use { session ->
             val id =
                 session.addStructuredSecret(
                     type = SecretType.SSH_KEY,
@@ -251,7 +243,7 @@ class LocalVaultSessionTest {
     @Test
     fun rotateVaultKeyAndPublishDeclaresReplacementAndRepublishesDevicePackage() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000008")
+        lateinit var fingerprint: String
         DeviceIdentityStore(directory.resolve("device"))
             .createOrLoad("laptop-1", "identity-password".toCharArray())
             .use { identity ->
@@ -261,22 +253,22 @@ class LocalVaultSessionTest {
                     withServer(
                         responseFor = { request ->
                             when (request.path) {
-                                "/api/v1/vaults/$vaultId/key-rotation" -> TestResponse(204)
+                                "/api/v1/vaults/$fingerprint/key-rotation" -> TestResponse(204)
                                 "/api/v1/devices" ->
                                     TestResponse(
                                         200,
                                         """[{"deviceId":"laptop-1","keyAlgorithm":"${identity.proofKeyAlgorithm}","publicKey":"${Base64.getEncoder().encodeToString(proofPublicKey)}","wrappingKeyAlgorithm":"${identity.keyAlgorithm}","wrappingPublicKey":"${Base64.getEncoder().encodeToString(publicKey)}","createdAt":"2026-07-12T00:00:00Z","verifiedAt":"2026-07-12T00:00:01Z"}]""",
                                     )
-                                "/api/v1/vaults/$vaultId/key-packages/laptop-1" -> TestResponse(204)
+                                "/api/v1/vaults/$fingerprint/key-packages/laptop-1" -> TestResponse(204)
                                 else -> error("Unexpected request: ${request.method} ${request.path}")
                             }
                         },
                     ) { baseUrl, requests ->
                         LocalVaultSession.openOrCreate(
                             directory.resolve("vault"),
-                            vaultId,
                             "master-password".toCharArray(),
                         ).use { session ->
+                            fingerprint = session.fingerprintValue()
                             val vaultKeyId =
                                 session.rotateVaultKeyAndPublish(
                                     KeysteadServerClient(baseUrl, "alice", "secret"),
@@ -286,7 +278,7 @@ class LocalVaultSessionTest {
                             assertEquals(3, requests.size)
                             assertEquals("PUT", requests[0].method)
                             assertEquals(
-                                "/api/v1/vaults/$vaultId/key-rotation",
+                                "/api/v1/vaults/$fingerprint/key-rotation",
                                 requests[0].path,
                             )
                             assertTrue(requests[0].body.contains("\"vaultKeyId\":\"$vaultKeyId\""))
@@ -294,7 +286,7 @@ class LocalVaultSessionTest {
                             assertEquals("/api/v1/devices", requests[1].path)
                             assertEquals("PUT", requests[2].method)
                             assertEquals(
-                                "/api/v1/vaults/$vaultId/key-packages/laptop-1",
+                                "/api/v1/vaults/$fingerprint/key-packages/laptop-1",
                                 requests[2].path,
                             )
                             assertTrue(requests[2].body.contains("\"vaultKeyId\":\"$vaultKeyId\""))
@@ -312,7 +304,7 @@ class LocalVaultSessionTest {
     @Test
     fun publishAutomationVaultKeyPackageSendsRecipientBoundCiphertextOnly() {
         val directory = createTempDirectory("keystead-client-test")
-        val vaultId = UUID.fromString("40000000-0000-0000-0000-000000000009")
+        lateinit var fingerprint: String
         DeviceIdentityStore(directory.resolve("automation"))
             .createOrLoad("automation-key", "identity-password".toCharArray())
             .use { identity ->
@@ -321,7 +313,7 @@ class LocalVaultSessionTest {
                     withServer(
                         responseFor = { request ->
                             when (request.path) {
-                                "/api/v1/vaults/$vaultId/automation-principals/backup/key-package" ->
+                                "/api/v1/vaults/$fingerprint/automation-principals/backup/key-package" ->
                                     TestResponse(204)
                                 else -> error("Unexpected request: ${request.method} ${request.path}")
                             }
@@ -329,9 +321,9 @@ class LocalVaultSessionTest {
                     ) { baseUrl, requests ->
                         LocalVaultSession.openOrCreate(
                             directory.resolve("vault"),
-                            vaultId,
                             "master-password".toCharArray(),
                         ).use { session ->
+                            fingerprint = session.fingerprintValue()
                             val keyPackage =
                                 session.publishAutomationVaultKeyPackage(
                                     KeysteadServerClient(baseUrl, "alice", "secret"),
@@ -342,7 +334,7 @@ class LocalVaultSessionTest {
                             val request = requests.single()
                             assertEquals("PUT", request.method)
                             assertEquals(
-                                "/api/v1/vaults/$vaultId/automation-principals/backup/key-package",
+                                "/api/v1/vaults/$fingerprint/automation-principals/backup/key-package",
                                 request.path,
                             )
                             assertTrue(request.body.contains("\"vaultKeyId\":\"${keyPackage.vaultKeyId}\""))

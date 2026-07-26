@@ -109,7 +109,7 @@ class KeysteadServerClientTest {
             """
             [
               {
-                "vaultId": "vault-1",
+                "fingerprint": "vault-1",
                 "encryptedMetadata": "opaque-vault-metadata",
                 "createdAt": "2026-07-03T00:00:00Z",
                 "updatedAt": "2026-07-03T00:01:00Z"
@@ -164,7 +164,7 @@ class KeysteadServerClientTest {
             {
               "code": "REVISION_CONFLICT",
               "message": "Record revision must increase",
-              "vaultId": "vault-1",
+              "fingerprint": "vault-1",
               "secretId": "secret-1",
               "latestRevision": 2,
               "rejectedRevision": 1,
@@ -194,7 +194,7 @@ class KeysteadServerClientTest {
             assertEquals("Record revision must increase", error.message)
             assertEquals(2L, error.latestRevision)
             assertEquals(1L, error.rejectedRevision)
-            assertEquals("vault-1", error.vaultId)
+            assertEquals("vault-1", error.fingerprint)
             assertEquals("secret-1", error.secretId)
             assertEquals(2L, error.serverRevision)
             assertEquals(1L, error.clientRevision)
@@ -209,7 +209,7 @@ class KeysteadServerClientTest {
             """
             [
               {
-                "vaultId": "vault-1",
+                "fingerprint": "vault-1",
                 "secretId": "secret-1",
                 "revision": 2,
                 "secretType": "API_TOKEN",
@@ -245,7 +245,7 @@ class KeysteadServerClientTest {
             """
             [
               {
-                "vaultId": "vault-1",
+                "fingerprint": "vault-1",
                 "secretId": "secret-1",
                 "revision": 3,
                 "secretType": "API_TOKEN",
@@ -277,11 +277,11 @@ class KeysteadServerClientTest {
             200,
             """
             {
-              "vaultId": "vault-1",
+              "fingerprint": "vault-1",
               "sinceRevision": 1,
               "records": [
                 {
-                  "vaultId": "vault-1",
+                  "fingerprint": "vault-1",
                   "secretId": "secret-2",
                   "revision": 3,
                   "secretType": "SECURE_NOTE",
@@ -303,7 +303,7 @@ class KeysteadServerClientTest {
             assertEquals("/api/v1/vaults/vault-1/records/page?sinceRevision=1&limit=2", requests.single().path)
             assertEquals(
                 ServerEncryptedRecordPage(
-                    vaultId = "vault-1",
+                    fingerprint = "vault-1",
                     sinceRevision = 1,
                     records =
                         listOf(
@@ -526,7 +526,7 @@ class KeysteadServerClientTest {
                     "vault-1",
                     "laptop-1",
                     ServerVaultKeyPackage(
-                        vaultId = "vault-1",
+                        fingerprint = "vault-1",
                         deviceId = "laptop-1",
                         keyAlgorithm = "RSA_OAEP_SHA256",
                         encryptedVaultKey = "wrapped-key",
@@ -550,7 +550,7 @@ class KeysteadServerClientTest {
             """
             [
               {
-                "vaultId": "vault-1",
+                "fingerprint": "vault-1",
                 "deviceId": "phone-1",
                 "keyAlgorithm": "RSA_OAEP_SHA256",
                 "encryptedVaultKey": "wrapped-phone-key",
@@ -567,7 +567,7 @@ class KeysteadServerClientTest {
             assertEquals(
                 listOf(
                     ServerVaultKeyPackage(
-                        vaultId = "vault-1",
+                        fingerprint = "vault-1",
                         deviceId = "phone-1",
                         keyAlgorithm = "RSA_OAEP_SHA256",
                         encryptedVaultKey = "wrapped-phone-key",
