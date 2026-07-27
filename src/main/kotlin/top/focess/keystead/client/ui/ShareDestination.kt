@@ -15,6 +15,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -241,37 +245,69 @@ internal fun SharePanel(
                     style = MaterialTheme.typography.bodySmall,
                 )
             } else {
-                outstandingShares.forEach { summary ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                summary.code,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                "Created ${formatInstant(summary.createdAt)} - expires ${formatInstant(summary.expiresAt)}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            if (summary.burnAfterReading) {
+                val pageSize = SHARE_PAGE_SIZE
+                val totalPages = (outstandingShares.size + pageSize - 1) / pageSize
+                var page by remember(outstandingShares) { mutableStateOf(0) }
+                val currentPage = page.coerceIn(0, maxOf(0, totalPages - 1))
+                outstandingShares
+                    .drop(currentPage * pageSize)
+                    .take(pageSize)
+                    .forEach { summary ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
-                                    "Burns after reading",
+                                    summary.code,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    "Created ${formatInstant(summary.createdAt)} - expires ${formatInstant(summary.expiresAt)}",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
+                                if (summary.burnAfterReading) {
+                                    Text(
+                                        "Burns after reading",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = { onDeleteShare(summary.code) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Delete")
+                                }
                             }
-                            OutlinedButton(
-                                onClick = { onDeleteShare(summary.code) },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("Delete")
-                            }
+                        }
+                    }
+                if (totalPages > 1) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedButton(
+                            onClick = { page = currentPage - 1 },
+                            enabled = currentPage > 0,
+                        ) {
+                            Text("Previous")
+                        }
+                        Text(
+                            "Page ${currentPage + 1} of $totalPages",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        OutlinedButton(
+                            onClick = { page = currentPage + 1 },
+                            enabled = currentPage < totalPages - 1,
+                        ) {
+                            Text("Next")
                         }
                     }
                 }
@@ -279,6 +315,8 @@ internal fun SharePanel(
         }
     }
 }
+
+private const val SHARE_PAGE_SIZE = 10
 
 private fun formatInstant(instant: Instant): String =
     instant
