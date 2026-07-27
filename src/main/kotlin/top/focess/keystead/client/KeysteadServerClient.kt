@@ -150,6 +150,18 @@ data class ServerVault(
     val encryptedMetadata: String,
 )
 
+data class ServerMintedShare(
+    val code: String,
+    val expiresAt: Instant,
+)
+
+data class ServerShareSummary(
+    val code: String,
+    val createdAt: Instant,
+    val expiresAt: Instant,
+    val burnAfterReading: Boolean,
+)
+
 open class KeysteadServerException(
     val statusCode: Int,
     message: String,
@@ -476,6 +488,71 @@ class KeysteadServerClient private constructor(
         sendExpectingSuccess(request)
     }
 
+    fun mintShare(
+        payload: String,
+        expiresAt: Instant?,
+        burnAfterReading: Boolean?,
+    ): ServerMintedShare {
+        val body =
+            buildString {
+                append("{\"payload\":\"")
+                append(payload.json())
+                append('"')
+                if (expiresAt != null) {
+                    append(",\"expiresAt\":\"")
+                    append(expiresAt.toString().json())
+                    append('"')
+                }
+                if (burnAfterReading != null) {
+                    append(",\"burnAfterReading\":")
+                    append(burnAfterReading)
+                }
+                append('}')
+            }
+        val request =
+            HttpRequest.newBuilder(endpoint("api", "v1", "shares"))
+                .header("Authorization", authorization.headerValue())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        requireSuccess(response.statusCode(), response.body())
+        return ServerMintedShare(
+            code = jsonString(response.body(), "code"),
+            expiresAt = jsonInstant(response.body(), "expiresAt"),
+        )
+    }
+
+    fun redeemShare(code: String): String {
+        val request =
+            HttpRequest.newBuilder(endpoint("api", "v1", "shares", code))
+                .GET()
+                .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        requireSuccess(response.statusCode(), response.body())
+        return jsonString(response.body(), "payload")
+    }
+
+    fun listShares(): List<ServerShareSummary> {
+        val request =
+            HttpRequest.newBuilder(endpoint("api", "v1", "shares"))
+                .header("Authorization", authorization.headerValue())
+                .GET()
+                .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        requireSuccess(response.statusCode(), response.body())
+        return parseShareSummaries(response.body())
+    }
+
+    fun deleteShare(code: String) {
+        val request =
+            HttpRequest.newBuilder(endpoint("api", "v1", "shares", code))
+                .header("Authorization", authorization.headerValue())
+                .DELETE()
+                .build()
+        sendExpectingSuccess(request)
+    }
+
     private fun sendExpectingSuccess(
         request: HttpRequest,
         conflict: (String) -> KeysteadServerException = { revisionConflict(it) },
@@ -657,6 +734,24 @@ class KeysteadServerClient private constructor(
                     vaultKeyId = jsonStringOrNull(json, "vaultKeyId") ?: "legacy",
                     keyAlgorithm = jsonString(json, "keyAlgorithm"),
                     encryptedVaultKey = jsonString(json, "encryptedVaultKey"),
+                )
+            }
+            .toList()
+    }
+
+    private fun parseShareSummaries(body: String): List<ServerShareSummary> {
+        val trimmed = body.trim()
+        if (trimmed == "[]") {
+            return emptyList()
+        }
+        return jsonObjects(trimmed)
+            .asSequence()
+            .map { json ->
+                ServerShareSummary(
+                    code = jsonString(json, "code"),
+                    createdAt = jsonInstant(json, "createdAt"),
+                    expiresAt = jsonInstant(json, "expiresAt"),
+                    burnAfterReading = jsonBoolean(json, "burnAfterReading"),
                 )
             }
             .toList()

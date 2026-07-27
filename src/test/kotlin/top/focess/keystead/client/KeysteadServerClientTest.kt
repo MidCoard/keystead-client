@@ -577,6 +577,97 @@ class KeysteadServerClientTest {
             )
         }
 
+    @Test
+    fun mintShareSendsAuthenticatedJson() =
+        withServer(
+            201,
+            """{"code":"abc1234567","expiresAt":"2026-08-01T00:00:00Z"}""",
+        ) { baseUrl, requests ->
+            val minted =
+                KeysteadServerClient(baseUrl, "alice", "secret")
+                    .mintShare(
+                        "keystead-share:v1:opaque-blob",
+                        Instant.parse("2026-08-01T00:00:00Z"),
+                        true,
+                    )
+
+            val request = requests.single()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/shares", request.path)
+            assertEquals("Basic ${basic("alice", "secret")}", request.authorization)
+            assertEquals(
+                """{"payload":"keystead-share:v1:opaque-blob","expiresAt":"2026-08-01T00:00:00Z","burnAfterReading":true}""",
+                request.body,
+            )
+            assertEquals("abc1234567", minted.code)
+            assertEquals(Instant.parse("2026-08-01T00:00:00Z"), minted.expiresAt)
+        }
+
+    @Test
+    fun mintShareOmitsOptionalFieldsWhenNull() =
+        withServer(201, """{"code":"code-1","expiresAt":"2026-08-01T00:00:00Z"}""") { baseUrl, requests ->
+            KeysteadServerClient(baseUrl, "alice", "secret").mintShare("payload-only", null, null)
+
+            assertEquals("""{"payload":"payload-only"}""", requests.single().body)
+        }
+
+    @Test
+    fun redeemShareUsesPublicGet() =
+        withServer(200, """{"payload":"keystead-share:v1:opaque-blob"}""") { baseUrl, requests ->
+            val payload = KeysteadServerClient(baseUrl, "alice", "secret").redeemShare("abc1234567")
+
+            val request = requests.single()
+            assertEquals("GET", request.method)
+            assertEquals("/api/v1/shares/abc1234567", request.path)
+            assertEquals("", request.authorization)
+            assertEquals("keystead-share:v1:opaque-blob", payload)
+        }
+
+    @Test
+    fun listSharesReadsOwnerSummariesWithoutPayload() =
+        withServer(
+            200,
+            """
+            [
+              {"code":"code-1","createdAt":"2026-07-25T00:00:00Z","expiresAt":"2026-08-01T00:00:00Z","burnAfterReading":true},
+              {"code":"code-2","createdAt":"2026-07-25T00:00:00Z","expiresAt":"2026-08-01T00:00:00Z","burnAfterReading":false}
+            ]
+            """.trimIndent(),
+        ) { baseUrl, requests ->
+            val shares = KeysteadServerClient(baseUrl, "alice", "secret").listShares()
+
+            assertEquals("/api/v1/shares", requests.single().path)
+            assertEquals("Basic ${basic("alice", "secret")}", requests.single().authorization)
+            assertEquals(
+                listOf(
+                    ServerShareSummary("code-1", Instant.parse("2026-07-25T00:00:00Z"), Instant.parse("2026-08-01T00:00:00Z"), true),
+                    ServerShareSummary("code-2", Instant.parse("2026-07-25T00:00:00Z"), Instant.parse("2026-08-01T00:00:00Z"), false),
+                ),
+                shares,
+            )
+        }
+
+    @Test
+    fun deleteShareUsesAuthenticatedDelete() =
+        withServer(204) { baseUrl, requests ->
+            KeysteadServerClient(baseUrl, "alice", "secret").deleteShare("code-1")
+
+            val request = requests.single()
+            assertEquals("DELETE", request.method)
+            assertEquals("/api/v1/shares/code-1", request.path)
+            assertEquals("Basic ${basic("alice", "secret")}", request.authorization)
+        }
+
+    @Test
+    fun redeemShareReportsExpiredShareAsServerError() =
+        withServer(410) { baseUrl, _ ->
+            val error =
+                assertFailsWith<KeysteadServerException> {
+                    KeysteadServerClient(baseUrl, "alice", "secret").redeemShare("expired-code")
+                }
+            assertEquals(410, error.statusCode)
+        }
+
     private fun withServer(
         responseCode: Int,
         responseBody: String = "",

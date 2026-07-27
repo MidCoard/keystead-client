@@ -44,6 +44,7 @@ enum class KeysteadDestination(val label: String) {
     ADD("Add"),
     SYNC("Sync"),
     PROTECTION("Protection"),
+    SHARE("Share"),
 }
 
 @Composable
@@ -61,6 +62,7 @@ fun KeysteadAppShell(
     addContent: @Composable () -> Unit,
     syncContent: @Composable () -> Unit,
     protectionContent: @Composable () -> Unit,
+    shareContent: @Composable () -> Unit,
     unlockContent: @Composable () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -83,6 +85,8 @@ fun KeysteadAppShell(
                         CenteredScrollContent(maxWidth = 560.dp) { syncContent() }
                     destination == KeysteadDestination.PROTECTION ->
                         CenteredScrollContent(maxWidth = 560.dp) { protectionContent() }
+                    destination == KeysteadDestination.SHARE ->
+                        CenteredScrollContent(maxWidth = 640.dp) { shareContent() }
                 }
             }
         }
@@ -147,6 +151,7 @@ private fun destinationIcon(dest: KeysteadDestination) =
         KeysteadDestination.ADD -> Icons.Default.Add
         KeysteadDestination.SYNC -> SyncIcon
         KeysteadDestination.PROTECTION -> ShieldIcon
+        KeysteadDestination.SHARE -> ShareIcon
     }
 
 @Composable

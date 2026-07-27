@@ -45,6 +45,9 @@ DPAPI, macOS Keychain, or Linux Secret Service facility.
   editor/viewer roles, and package the vault key for every eligible device.
 - Remove members and complete a mandatory, resumable key rotation before new
   writes continue.
+- Share a single secret as a self-contained encrypted string hosted behind a
+  short server code, redeemed with a temp passphrase (burn-after-reading and
+  expiry supported).
 - Protect the local device identity with Windows DPAPI, macOS Keychain, or
   Linux Secret Service, or explicitly choose a passphrase file or memory-only
   identity.
@@ -298,7 +301,10 @@ user to choose a passphrase-protected file or non-persistent memory mode; it
 does not silently weaken storage.
 
 Collaboration is whole-vault. Membership roles and per-device key packages
-control server access, but there are no per-record ACLs or public share links.
+control server access; there are no per-record ACLs. For one-off sharing, a
+single secret can be minted as a self-contained encrypted share string and
+hosted behind a short server code (see the Share tab); the server stores only
+the opaque blob, and the temp passphrase is the only key.
 Removing a member and completing the required rotation prevents access to
 future key generations; it cannot erase plaintext, exports, screenshots, or
 ciphertext the member already retained.

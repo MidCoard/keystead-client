@@ -22,10 +22,12 @@ import top.focess.keystead.client.ui.AddSecretPanel
 import top.focess.keystead.client.ui.InspectorPanel
 import top.focess.keystead.client.ui.LifecyclePanel
 import top.focess.keystead.client.ui.SecretListPanel
+import top.focess.keystead.client.ui.SharePanel
 import top.focess.keystead.client.ui.SyncPanel
 import top.focess.keystead.client.ui.collaborationStatus
 import top.focess.keystead.client.ui.storageStatus
 import top.focess.keystead.model.SecretType
+import top.focess.keystead.share.ShareContents
 
 private val defaultVaultDirectory: String =
     Path.of(System.getProperty("user.home"), ".keystead-client", "vault.kvault").toString()
@@ -118,6 +120,17 @@ fun KeysteadClientApp() {
         mutableStateOf(top.focess.keystead.client.ui.KeysteadDestination.SECRETS)
     }
     var inspectorSheetOpen by remember { mutableStateOf(false) }
+
+    val shareExchange = remember { ShareExchange() }
+    var shareTitle by remember { mutableStateOf("") }
+    var sharePayload by remember { mutableStateOf("") }
+    var sharePassphrase by remember { mutableStateOf("") }
+    var shareTtl by remember { mutableStateOf(ShareExchange.ShareTtl.ONE_WEEK) }
+    var shareBurn by remember { mutableStateOf(true) }
+    var mintedShare by remember { mutableStateOf<ShareExchange.MintedShare?>(null) }
+    var redeemCode by remember { mutableStateOf("") }
+    var redeemPassphrase by remember { mutableStateOf("") }
+    var redeemedContents by remember { mutableStateOf<ShareContents?>(null) }
 
     fun clearSecretEditor() {
         title = ""
@@ -1162,6 +1175,64 @@ fun KeysteadClientApp() {
         )
     }
 
+    val sharePanel: @Composable () -> Unit = {
+        SharePanel(
+            authenticated = serverAuthSession != null,
+            title = shareTitle,
+            onTitleChange = { shareTitle = it },
+            payload = sharePayload,
+            onPayloadChange = { sharePayload = it },
+            passphrase = sharePassphrase,
+            onPassphraseChange = { sharePassphrase = it },
+            ttl = shareTtl,
+            onTtlChange = { shareTtl = it },
+            burnAfterReading = shareBurn,
+            onBurnChange = { shareBurn = it },
+            mintedShare = mintedShare,
+            onClearMinted = { mintedShare = null },
+            onMint = {
+                val passphrase = sharePassphrase.toCharArray()
+                try {
+                    runAction {
+                        val minted =
+                            shareExchange.mint(
+                                serverClient(),
+                                shareTitle,
+                                sharePayload,
+                                passphrase,
+                                shareTtl,
+                                shareBurn,
+                            )
+                        mintedShare = minted
+                        sharePassphrase = ""
+                        status = "Share minted: ${minted.code}"
+                    }
+                } finally {
+                    Wipe.wipe(passphrase)
+                }
+            },
+            redeemCode = redeemCode,
+            onRedeemCodeChange = { redeemCode = it },
+            redeemPassphrase = redeemPassphrase,
+            onRedeemPassphraseChange = { redeemPassphrase = it },
+            redeemedContents = redeemedContents,
+            onClearRedeemed = { redeemedContents = null },
+            onRedeem = {
+                val passphrase = redeemPassphrase.toCharArray()
+                try {
+                    runAction {
+                        val contents = shareExchange.redeem(serverClient(), redeemCode, passphrase)
+                        redeemedContents = contents
+                        redeemPassphrase = ""
+                        status = "Share redeemed"
+                    }
+                } finally {
+                    Wipe.wipe(passphrase)
+                }
+            },
+        )
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val layoutMode = KeysteadWindowMetrics.modeForWidth(maxWidth.value)
         top.focess.keystead.client.ui.KeysteadAppShell(
@@ -1187,6 +1258,10 @@ fun KeysteadClientApp() {
                 clearSecretEditor()
                 masterPassword = ""
                 serverPassword = ""
+                sharePassphrase = ""
+                redeemPassphrase = ""
+                redeemedContents = null
+                mintedShare = null
                 unloadDeviceIdentity()
                 currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
                 inspectorSheetOpen = false
@@ -1198,6 +1273,7 @@ fun KeysteadClientApp() {
             addContent = { addPanel() },
             syncContent = { syncPanel() },
             protectionContent = { protectionPanel() },
+            shareContent = { sharePanel() },
             unlockContent = {
                 top.focess.keystead.client.ui.UnlockScreen(
                     vaultDirectory = vaultDirectory,
