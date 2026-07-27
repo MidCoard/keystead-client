@@ -15,9 +15,10 @@ jobs:
           - os: windows-latest
             artifact: keystead-windows
             gradle: .\gradlew.bat
-          - os: macos-latest
-            artifact: keystead-macos
-            gradle: ./gradlew
+          # macOS is intentionally omitted: jpackage's Dmg packager requires
+          # MAJOR > 0, so it cannot match a 0.x release version. Re-add a
+          # macos-latest leg (and TargetFormat.Dmg in build.gradle.kts) once
+          # the project reaches a 1.0 standard release.
           - os: ubuntu-latest
             artifact: keystead-linux
             gradle: ./gradlew

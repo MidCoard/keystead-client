@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "top.focess"
-version = "0.3.0-SNAPSHOT"
+version = "0.4.0"
 
 kotlin {
     jvmToolchain(25)
@@ -35,15 +35,15 @@ compose.desktop {
     application {
         mainClass = "top.focess.keystead.client.MainKt"
         nativeDistributions {
-            targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
+            targetFormats(TargetFormat.Msi, TargetFormat.Deb)
             packageName = "Keystead"
-            // The installer version is intentionally decoupled from the project's
-            // 0.x semver: the macOS Dmg/PkgBuild packagers reject any version whose
-            // MAJOR component is 0 (it must be an integer > 0), so a 0.2.0 project
-            // version cannot be used as the packageVersion. Keep a stable MAJOR>=1
-            // installer version here until the project reaches a real 1.0; bump the
-            // minor/patch manually per release if desired.
-            packageVersion = "1.0.0"
+            // Installer version mirrors the project release version (0.4.0).
+            // macOS DMG is intentionally NOT built: jpackage's Dmg packager
+            // requires MAJOR > 0, so it cannot match a 0.x release version. macOS
+            // publishing is deferred until the project reaches a 1.0 standard
+            // release where all platforms can share one version. Re-add Dmg (and
+            // the macos matrix leg in release.yml) at that point. Bump per release.
+            packageVersion = "0.4.0"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first
