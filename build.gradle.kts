@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "top.focess"
-version = "0.4.1"
+version = "0.4.2-SNAPSHOT"
 
 kotlin {
     jvmToolchain(25)
