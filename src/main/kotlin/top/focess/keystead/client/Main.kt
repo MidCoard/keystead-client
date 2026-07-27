@@ -131,6 +131,7 @@ fun KeysteadClientApp() {
     var redeemCode by remember { mutableStateOf("") }
     var redeemPassphrase by remember { mutableStateOf("") }
     var redeemedContents by remember { mutableStateOf<ShareContents?>(null) }
+    var outstandingShares by remember { mutableStateOf<List<ServerShareSummary>>(emptyList()) }
 
     fun clearSecretEditor() {
         title = ""
@@ -1175,6 +1176,14 @@ fun KeysteadClientApp() {
         )
     }
 
+    LaunchedEffect(serverAuthSession, currentDestination) {
+        if (serverAuthSession != null &&
+            currentDestination == top.focess.keystead.client.ui.KeysteadDestination.SHARE
+        ) {
+            runAction { outstandingShares = serverClient().listShares() }
+        }
+    }
+
     val sharePanel: @Composable () -> Unit = {
         SharePanel(
             authenticated = serverAuthSession != null,
@@ -1190,6 +1199,10 @@ fun KeysteadClientApp() {
             onBurnChange = { shareBurn = it },
             mintedShare = mintedShare,
             onClearMinted = { mintedShare = null },
+            onCopyCode = { code ->
+                clipboardTicket = clipboardLifecycle.copy(code, java.time.Instant.now())
+                status = "Copied share code to clipboard (clears in 30s)"
+            },
             onMint = {
                 val passphrase = sharePassphrase.toCharArray()
                 try {
@@ -1204,7 +1217,10 @@ fun KeysteadClientApp() {
                                 shareBurn,
                             )
                         mintedShare = minted
+                        shareTitle = ""
+                        sharePayload = ""
                         sharePassphrase = ""
+                        outstandingShares = serverClient().listShares()
                         status = "Share minted: ${minted.code}"
                     }
                 } finally {
@@ -1219,15 +1235,36 @@ fun KeysteadClientApp() {
             onClearRedeemed = { redeemedContents = null },
             onRedeem = {
                 val passphrase = redeemPassphrase.toCharArray()
+                val code = redeemCode.trim()
                 try {
                     runAction {
-                        val contents = shareExchange.redeem(serverClient(), redeemCode, passphrase)
+                        val contents =
+                            shareExchange.redeem(
+                                KeysteadServerClient.forPublicRedeem(serverUrl),
+                                code,
+                                passphrase,
+                            )
                         redeemedContents = contents
+                        redeemCode = ""
                         redeemPassphrase = ""
                         status = "Share redeemed"
                     }
                 } finally {
                     Wipe.wipe(passphrase)
+                }
+            },
+            outstandingShares = outstandingShares,
+            onRefreshShares = {
+                runAction {
+                    outstandingShares = serverClient().listShares()
+                    status = "Loaded ${outstandingShares.size} share(s)"
+                }
+            },
+            onDeleteShare = { code ->
+                runAction {
+                    serverClient().deleteShare(code)
+                    outstandingShares = outstandingShares.filterNot { it.code == code }
+                    status = "Deleted share $code"
                 }
             },
         )
@@ -1258,10 +1295,14 @@ fun KeysteadClientApp() {
                 clearSecretEditor()
                 masterPassword = ""
                 serverPassword = ""
+                shareTitle = ""
+                sharePayload = ""
                 sharePassphrase = ""
+                redeemCode = ""
                 redeemPassphrase = ""
                 redeemedContents = null
                 mintedShare = null
+                outstandingShares = emptyList()
                 unloadDeviceIdentity()
                 currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
                 inspectorSheetOpen = false

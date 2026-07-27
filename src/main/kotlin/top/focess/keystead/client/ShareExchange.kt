@@ -3,6 +3,7 @@ package top.focess.keystead.client
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import top.focess.keystead.crypto.CryptoException
 import top.focess.keystead.crypto.DefaultCryptoService
 import top.focess.keystead.model.SecretType
 import top.focess.keystead.share.ShareContents
@@ -81,10 +82,54 @@ class ShareExchange(
      * For burn-after-reading shares the server deletes the blob on redeem, so a wrong passphrase
      * cannot be retried - callers should warn the user before redeeming. The [passphrase] char
      * array is wiped by core on return (including on failure).
+     *
+     * A wrong passphrase (or a tampered share) fails AEAD verification in core; that low-level
+     * [CryptoException] is remapped to a user-facing message so the UI does not surface a raw
+     * "could not decrypt payload" diagnostic.
      */
     fun redeem(client: KeysteadServerClient, code: String, passphrase: CharArray): ShareContents {
         require(code.isNotBlank()) { "Share code must not be blank" }
         val shareString = client.redeemShare(code)
-        return shareService.open(shareString, passphrase)
+        return try {
+            shareService.open(shareString, passphrase)
+        } catch (e: CryptoException) {
+            throw IllegalStateException(
+                "Could not open the share; the passphrase is wrong or the share was tampered with.",
+                e,
+            )
+        }
+    }
+
+    companion object {
+        /**
+         * Mirrors core's share passphrase policy so the UI can pre-validate the temp passphrase
+         * before mint/redeem: at least 12 characters spanning at least 3 of the lower/upper/digit/
+         * symbol classes. Whitespace and control characters do not count toward the symbol class,
+         * matching [top.focess.keystead.share.ShareService] exactly so the UI never disables an
+         * action for a passphrase core would accept.
+         */
+        fun meetsPassphrasePolicy(passphrase: String): Boolean {
+            if (passphrase.length < 12) {
+                return false
+            }
+            var lower = false
+            var upper = false
+            var digit = false
+            var symbol = false
+            for (character in passphrase) {
+                when {
+                    character.isLowerCase() -> lower = true
+                    character.isUpperCase() -> upper = true
+                    character.isDigit() -> digit = true
+                    !character.isWhitespace() && !character.isISOControl() -> symbol = true
+                }
+            }
+            var classes = 0
+            if (lower) classes++
+            if (upper) classes++
+            if (digit) classes++
+            if (symbol) classes++
+            return classes >= 3
+        }
     }
 }

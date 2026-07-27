@@ -20,6 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import top.focess.keystead.client.ServerShareSummary
 import top.focess.keystead.client.ShareExchange
 import top.focess.keystead.share.ShareContents
 
@@ -38,6 +42,7 @@ internal fun SharePanel(
     onBurnChange: (Boolean) -> Unit,
     mintedShare: ShareExchange.MintedShare?,
     onClearMinted: () -> Unit,
+    onCopyCode: (String) -> Unit,
     onMint: () -> Unit,
     redeemCode: String,
     onRedeemCodeChange: (String) -> Unit,
@@ -46,14 +51,20 @@ internal fun SharePanel(
     redeemedContents: ShareContents?,
     onClearRedeemed: () -> Unit,
     onRedeem: () -> Unit,
+    outstandingShares: List<ServerShareSummary>,
+    onRefreshShares: () -> Unit,
+    onDeleteShare: (String) -> Unit,
 ) {
-    val mintReady = authenticated && title.isNotBlank() && payload.isNotEmpty() && passphrase.length >= 12
-    val redeemReady = authenticated && redeemCode.isNotBlank() && redeemPassphrase.length >= 12
+    val mintReady =
+        authenticated && title.isNotBlank() && payload.isNotEmpty() &&
+            ShareExchange.meetsPassphrasePolicy(passphrase)
+    val redeemReady =
+        redeemCode.isNotBlank() && ShareExchange.meetsPassphrasePolicy(redeemPassphrase)
     DestinationCard {
         SectionHeader("Share")
         if (!authenticated) {
             Text(
-                "Sign in to Keystead Server on the Sync tab to mint or redeem shares.",
+                "Sign in to Keystead Server on the Sync tab to mint shares. Redeeming a share you received does not require signing in.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -82,6 +93,12 @@ internal fun SharePanel(
             enabled = authenticated,
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
+            isError = passphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(passphrase),
+            supportingText = {
+                if (passphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(passphrase)) {
+                    Text("Use 12+ characters across at least 3 of lower/upper/digit/symbol.")
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
@@ -125,7 +142,7 @@ internal fun SharePanel(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "Expires: ${minted.expiresAt}",
+                        "Expires: ${formatInstant(minted.expiresAt)}",
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -138,8 +155,16 @@ internal fun SharePanel(
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    OutlinedButton(onClick = onClearMinted, modifier = Modifier.fillMaxWidth()) {
-                        Text("Clear")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { onCopyCode(minted.code) },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Copy code")
+                        }
+                        OutlinedButton(onClick = onClearMinted, modifier = Modifier.weight(1f)) {
+                            Text("Clear")
+                        }
                     }
                 }
             }
@@ -151,7 +176,6 @@ internal fun SharePanel(
             redeemCode,
             onRedeemCodeChange,
             label = { Text("Share code") },
-            enabled = authenticated,
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -159,9 +183,14 @@ internal fun SharePanel(
             redeemPassphrase,
             onRedeemPassphraseChange,
             label = { Text("Temp passphrase") },
-            enabled = authenticated,
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
+            isError = redeemPassphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(redeemPassphrase),
+            supportingText = {
+                if (redeemPassphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(redeemPassphrase)) {
+                    Text("Use 12+ characters across at least 3 of lower/upper/digit/symbol.")
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
@@ -189,12 +218,69 @@ internal fun SharePanel(
                     contents.sharerNote?.let { note ->
                         Text("Note: $note", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
                     }
-                    Text("Created: ${contents.createdAt}", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
+                    Text("Created: ${formatInstant(contents.createdAt)}", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = onClearRedeemed, modifier = Modifier.fillMaxWidth()) {
                         Text("Clear")
                     }
                 }
             }
         }
+
+        if (authenticated) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            GroupLabel("Your shares on the server")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onRefreshShares, modifier = Modifier.weight(1f)) {
+                    Text("Refresh")
+                }
+            }
+            if (outstandingShares.isEmpty()) {
+                Text(
+                    "No outstanding shares. Mint one above, or refresh to check the server.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                outstandingShares.forEach { summary ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                summary.code,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "Created ${formatInstant(summary.createdAt)} - expires ${formatInstant(summary.expiresAt)}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (summary.burnAfterReading) {
+                                Text(
+                                    "Burns after reading",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { onDeleteShare(summary.code) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Delete")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+private fun formatInstant(instant: Instant): String =
+    instant
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))

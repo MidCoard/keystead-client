@@ -185,6 +185,33 @@ class KeysteadAuthenticationException(statusCode: Int) :
 class KeysteadAccountConflictException :
     KeysteadServerException(409, "Server user already exists.")
 
+/**
+ * Raised when no share exists for the supplied code (HTTP 404). For a burn-after-reading share
+ * this also covers the case where a concurrent redeem already consumed it.
+ */
+class KeysteadShareNotFoundException :
+    KeysteadServerException(404, "No share found for that code.")
+
+/**
+ * Raised when the share has expired or has already been redeemed (HTTP 410).
+ */
+class KeysteadShareExpiredException :
+    KeysteadServerException(410, "This share has expired or has already been redeemed.")
+
+/**
+ * Raised when the server's share rate limit is hit (HTTP 429). [retryAfterSeconds] carries the
+ * server-advertised back-off when the `Retry-After` header is present.
+ */
+class KeysteadShareRateLimitedException(val retryAfterSeconds: Long?) :
+    KeysteadServerException(
+        429,
+        if (retryAfterSeconds != null) {
+            "Too many share attempts. Wait $retryAfterSeconds second(s) and try again."
+        } else {
+            "Too many share attempts. Wait a minute and try again."
+        },
+    )
+
 private const val defaultRevisionConflictMessage =
     "Server has a newer revision; pull before pushing again."
 
@@ -207,6 +234,25 @@ class KeysteadServerClient private constructor(
         authorization: ServerAuthorization,
         http: HttpClient = HttpClient.newHttpClient(),
     ) : this(baseUrl, http, authorization)
+
+    companion object {
+        /**
+         * Builds a client that can only redeem shares via the server's public redeem endpoint.
+         *
+         * No server account is required, so a recipient who has not signed in can still open a
+         * share they received out of band. Authenticated methods (mint/list/delete) called on
+         * this client are rejected by the server because no credentials are attached; the
+         * [redeemShare] call itself never sends an `Authorization` header.
+         */
+        fun forPublicRedeem(baseUrl: String, http: HttpClient = HttpClient.newHttpClient()): KeysteadServerClient =
+            KeysteadServerClient(baseUrl, PublicRedeemAuthorization, http)
+    }
+
+    private object PublicRedeemAuthorization : ServerAuthorization {
+        override fun headerValue(): String = ""
+
+        override fun toString(): String = "PublicRedeemAuthorization"
+    }
 
     internal fun exchange(
         method: String,
@@ -516,7 +562,7 @@ class KeysteadServerClient private constructor(
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        requireSuccess(response.statusCode(), response.body())
+        requireShareSuccess(response.statusCode(), retryAfterSeconds(response))
         return ServerMintedShare(
             code = jsonString(response.body(), "code"),
             expiresAt = jsonInstant(response.body(), "expiresAt"),
@@ -529,7 +575,7 @@ class KeysteadServerClient private constructor(
                 .GET()
                 .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        requireSuccess(response.statusCode(), response.body())
+        requireShareSuccess(response.statusCode(), retryAfterSeconds(response))
         return jsonString(response.body(), "payload")
     }
 
@@ -540,7 +586,7 @@ class KeysteadServerClient private constructor(
                 .GET()
                 .build()
         val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        requireSuccess(response.statusCode(), response.body())
+        requireShareSuccess(response.statusCode(), retryAfterSeconds(response))
         return parseShareSummaries(response.body())
     }
 
@@ -550,7 +596,8 @@ class KeysteadServerClient private constructor(
                 .header("Authorization", authorization.headerValue())
                 .DELETE()
                 .build()
-        sendExpectingSuccess(request)
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        requireShareSuccess(response.statusCode(), retryAfterSeconds(response))
     }
 
     private fun sendExpectingSuccess(
@@ -576,6 +623,29 @@ class KeysteadServerClient private constructor(
             throw KeysteadAuthenticationException(statusCode)
         }
         throw KeysteadServerException(statusCode, "Keystead Server returned HTTP $statusCode")
+    }
+
+    /**
+     * Status mapping for the share endpoints, where 404/410/429 carry share-specific meaning
+     * (missing, expired/burned, rate-limited). [retryAfterSeconds] is the parsed `Retry-After`
+     * header, if any, surfaced to the user on 429.
+     */
+    private fun requireShareSuccess(statusCode: Int, retryAfterSeconds: Long?) {
+        if (statusCode in 200..299) {
+            return
+        }
+        when (statusCode) {
+            404 -> throw KeysteadShareNotFoundException()
+            410 -> throw KeysteadShareExpiredException()
+            429 -> throw KeysteadShareRateLimitedException(retryAfterSeconds)
+            401, 403 -> throw KeysteadAuthenticationException(statusCode)
+            else -> throw KeysteadServerException(statusCode, "Keystead Server returned HTTP $statusCode")
+        }
+    }
+
+    private fun retryAfterSeconds(response: HttpResponse<*>): Long? {
+        val value = response.headers().firstValueAsLong("Retry-After")
+        return if (value.isPresent) value.asLong else null
     }
 
     private fun revisionConflict(body: String): KeysteadRevisionConflictException =

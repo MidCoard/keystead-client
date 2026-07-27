@@ -7,6 +7,8 @@ import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.SecretType
 
@@ -112,7 +114,7 @@ class ShareExchangeTest {
                 ShareExchange.ShareTtl.ONE_WEEK,
                 false,
             )
-            assertFailsWithCryptographicFailure {
+            assertFailsWithWrongPassphrase {
                 exchange.redeem(client, "code-2", wrongPassphrase)
             }
         } finally {
@@ -120,6 +122,24 @@ class ShareExchangeTest {
             Wipe.wipe(mintPassphrase)
             Wipe.wipe(wrongPassphrase)
         }
+    }
+
+    @Test
+    fun meetsPassphrasePolicyRejectsShortPassphrases() {
+        assertFalse(ShareExchange.meetsPassphrasePolicy(""))
+        assertFalse(ShareExchange.meetsPassphrasePolicy("Ab1!Ab1!Ab1"))
+    }
+
+    @Test
+    fun meetsPassphrasePolicyRequiresThreeCharacterClasses() {
+        assertFalse(ShareExchange.meetsPassphrasePolicy("abcdefgh1234"))
+        assertTrue(ShareExchange.meetsPassphrasePolicy("Abcdefgh1234"))
+    }
+
+    @Test
+    fun meetsPassphrasePolicyDoesNotCountWhitespaceAsSymbol() {
+        assertTrue(ShareExchange.meetsPassphrasePolicy("Correct Horse42"))
+        assertFalse(ShareExchange.meetsPassphrasePolicy("correct 1234  "))
     }
 
     private fun extractPayload(body: String): String =
@@ -151,12 +171,15 @@ class ShareExchangeTest {
         return sb.toString()
     }
 
-    private fun assertFailsWithCryptographicFailure(block: () -> Unit) {
+    private fun assertFailsWithWrongPassphrase(block: () -> Unit) {
         try {
             block()
             error("Expected the share open to fail")
-        } catch (_: RuntimeException) {
-            // A wrong passphrase fails decryption; the exact exception type is an implementation detail.
+        } catch (e: RuntimeException) {
+            assertTrue(
+                e.message?.contains("passphrase", ignoreCase = true) == true,
+                "Expected a passphrase failure message but was: ${e.message}",
+            )
         }
     }
 }

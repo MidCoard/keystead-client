@@ -659,18 +659,76 @@ class KeysteadServerClientTest {
         }
 
     @Test
-    fun redeemShareReportsExpiredShareAsServerError() =
+    fun redeemShareReportsExpiredShareAsShareExpired() =
         withServer(410) { baseUrl, _ ->
             val error =
-                assertFailsWith<KeysteadServerException> {
+                assertFailsWith<KeysteadShareExpiredException> {
                     KeysteadServerClient(baseUrl, "alice", "secret").redeemShare("expired-code")
                 }
             assertEquals(410, error.statusCode)
+            assertEquals("This share has expired or has already been redeemed.", error.message)
+        }
+
+    @Test
+    fun redeemShareReportsMissingShareAsNotFound() =
+        withServer(404) { baseUrl, _ ->
+            val error =
+                assertFailsWith<KeysteadShareNotFoundException> {
+                    KeysteadServerClient(baseUrl, "alice", "secret").redeemShare("missing-code")
+                }
+            assertEquals(404, error.statusCode)
+            assertEquals("No share found for that code.", error.message)
+        }
+
+    @Test
+    fun redeemShareReportsRateLimitWithRetryAfter() =
+        withServer(429, responseHeaders = mapOf("Retry-After" to "30")) { baseUrl, _ ->
+            val error =
+                assertFailsWith<KeysteadShareRateLimitedException> {
+                    KeysteadServerClient(baseUrl, "alice", "secret").redeemShare("code-1")
+                }
+            assertEquals(429, error.statusCode)
+            assertEquals(30L, error.retryAfterSeconds)
+            assertEquals("Too many share attempts. Wait 30 second(s) and try again.", error.message)
+        }
+
+    @Test
+    fun redeemShareReportsRateLimitWithoutRetryAfter() =
+        withServer(429) { baseUrl, _ ->
+            val error =
+                assertFailsWith<KeysteadShareRateLimitedException> {
+                    KeysteadServerClient(baseUrl, "alice", "secret").redeemShare("code-1")
+                }
+            assertEquals(null, error.retryAfterSeconds)
+            assertEquals("Too many share attempts. Wait a minute and try again.", error.message)
+        }
+
+    @Test
+    fun forPublicRedeemRedeemsWithoutAuthorization() =
+        withServer(200, """{"payload":"keystead-share:v1:opaque-blob"}""") { baseUrl, requests ->
+            val payload = KeysteadServerClient.forPublicRedeem(baseUrl).redeemShare("abc1234567")
+
+            val request = requests.single()
+            assertEquals("GET", request.method)
+            assertEquals("/api/v1/shares/abc1234567", request.path)
+            assertEquals("", request.authorization)
+            assertEquals("keystead-share:v1:opaque-blob", payload)
+        }
+
+    @Test
+    fun deleteShareReportsMissingShareAsNotFound() =
+        withServer(404) { baseUrl, _ ->
+            val error =
+                assertFailsWith<KeysteadShareNotFoundException> {
+                    KeysteadServerClient(baseUrl, "alice", "secret").deleteShare("missing-code")
+                }
+            assertEquals(404, error.statusCode)
         }
 
     private fun withServer(
         responseCode: Int,
         responseBody: String = "",
+        responseHeaders: Map<String, String> = emptyMap(),
         block: (String, MutableList<CapturedRequest>) -> Unit,
     ) {
         val requests = mutableListOf<CapturedRequest>()
@@ -685,6 +743,7 @@ class KeysteadServerClientTest {
                 ),
             )
             val response = responseBody.encodeToByteArray()
+            responseHeaders.forEach { (name, value) -> exchange.responseHeaders.set(name, value) }
             exchange.sendResponseHeaders(responseCode, response.size.toLong())
             exchange.responseBody.use { it.write(response) }
             exchange.close()
