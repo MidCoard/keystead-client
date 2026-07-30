@@ -9,7 +9,9 @@ rotation, and recovery.
 The application is built with Kotlin/JVM and Compose Desktop. A local vault
 works without an account or server. When a server is connected, the client
 still owns every operation involving plaintext, vault keys, recovery private
-keys, and device private keys.
+keys, and device private keys. The server only sees ciphertext and routing
+metadata; this design is often called zero-knowledge because the service
+provider cannot decrypt your data.
 
 ## The Keystead ecosystem
 
@@ -21,36 +23,45 @@ Keystead is delivered as three independent repositories:
 | **[Keystead Core](https://github.com/MidCoard/keystead)** | The Java cryptography, typed-secret, local-persistence, encrypted-protocol, native-memory, and process-hardening foundation used by the client |
 | **[Keystead Server](https://github.com/MidCoard/keystead-server)** | The optional self-hosted account and zero-knowledge synchronization service |
 
-Keystead's OS-native security is also shared across these layers. Core protects
-owned key material in fail-closed locked native memory by default. Client
-protects persistent device identity material with the signed-in user's Windows
-DPAPI, macOS Keychain, or Linux Secret Service facility.
+Keystead's OS-native security is shared across these layers. Core protects
+owned key material in fail-closed locked native memory by default (locked
+memory means the operating system is asked not to page the buffer to disk;
+if that request cannot be honored, Core refuses to continue rather than
+silently falling back). Client protects persistent device identity material
+with the signed-in user's Windows DPAPI, macOS Keychain, or Linux Secret
+Service facility.
 
 ## What you can do
 
 - Create or open a password-protected local vault.
-- Store logins, secure notes, API tokens, SSH keys, OpenPGP keys, MFA secrets,
-  certificates, and generic structured secrets.
-- Generate passwords, API tokens, SSH/OpenPGP key pairs, MFA seeds, and
+- Store logins, secure notes, API tokens, SSH keys, GPG keys, MFA secrets,
+  certificates, and generic secrets.
+- Generate passwords, API tokens, SSH/GPG key pairs, MFA seeds, and
   certificates from the application.
 - Search and filter records by type and taxonomy fields.
 - Reveal a protected field temporarily and copy it through an expiring
   clipboard workflow.
-- Edit or delete records while preserving sync revisions and tombstones.
-- Sign in to a Keystead Server with a short-lived bearer session.
-- Enroll and verify a device using a challenge and local signing key.
+- Edit or delete records while preserving sync revisions and tombstones
+  (tombstones are encrypted deletion markers that tell other devices a record
+  was removed).
+- Sign in to a Keystead Server with a short-lived bearer session. The server
+  password is used once to obtain access and refresh tokens; afterwards the
+  client sends only the bearer token.
+- Enroll and verify a device using a challenge signed with a local proof key.
 - Push and pull encrypted records, handle revision conflicts, and synchronize
   deletions.
 - Invite people to a vault, accept or decline invitations, assign owner/admin/
-  editor/viewer roles, and package the vault key for every eligible device.
+  editor/viewer roles, and package the vault key separately for every eligible
+  device.
 - Remove members and complete a mandatory, resumable key rotation before new
-  writes continue.
+  writes continue. Rotation means generating a new vault key and re-encrypting
+  the vault for the remaining members and devices.
 - Share a single secret as a self-contained encrypted string hosted behind a
-  short server code, redeemed with a temp passphrase (burn-after-reading and
-  expiry supported).
+  short server code, redeemed with a temporary passphrase. Burn-after-reading
+  and expiry options are supported.
 - Protect the local device identity with Windows DPAPI, macOS Keychain, or
-  Linux Secret Service, or explicitly choose a passphrase file or memory-only
-  identity.
+  Linux Secret Service, or explicitly choose a passphrase-encrypted identity
+  file or a memory-only identity that is discarded when the app exits.
 - Recover a server account and its vault access from an offline recovery kit or
   approval by an existing verified device.
 - Export and restore encrypted backups with conflict reporting.
@@ -64,9 +75,9 @@ state, not the plaintext secret or raw vault key.
 
 The application also treats the unlocked desktop session as a sensitive state:
 
-- vault keys and `SecretBuffer` values use Keystead Core's fail-closed native
-  locked-memory provider by default; the packaged launcher grants the native
-  access required by Core;
+- vault keys and `SecretBuffer` values (Keystead Core's wipeable secret-memory
+  holder) use Core's fail-closed native locked-memory provider by default; the
+  packaged launcher grants the native access required by Core;
 - closing or locking the vault closes the local vault handle;
 - revealed values expire after a short timeout;
 - selecting, editing, deleting, or locking clears reveal state; a pulled
@@ -93,7 +104,8 @@ live compromised process trustworthy.
 
 ## Typical workflow
 
-1. Choose a local vault directory and vault ID.
+1. Choose a vault file path (or accept the default). A path that does not yet
+   exist creates a new one-file vault.
 2. Enter a master password and open or create the vault.
 3. Select a secret type, complete its fields, and save it.
 4. Select a record to reveal, copy, edit, or delete it. Reveal and clipboard
@@ -101,18 +113,21 @@ live compromised process trustworthy.
 5. Optionally create a server account and sign in. The password is not retained
    as the normal request credential; the client uses a memory-only bearer
    session.
-6. Choose OS-user-protected storage, a passphrase-encrypted identity file, or a
-   non-persistent memory-only identity. Existing passphrase identities can be
-   migrated only after save, reload, signature, and wrapping-key verification.
+6. Choose how to protect the device identity: OS-user-protected storage, a
+   passphrase-encrypted identity file, or a non-persistent memory-only identity.
+   If you later switch to OS-protected storage, an existing passphrase identity
+   can be migrated only after save, reload, signature, and wrapping-key
+   verification.
 7. Create or unlock a local device identity, register its public proof and
-   wrapping keys, complete the challenge, and publish eligible key packages.
+   wrapping keys, complete the server challenge, and publish eligible key
+   packages.
 8. Push local encrypted changes and pull remote pages. If the server has a newer
    revision, pull first and resolve the conflict locally.
-9. Optionally manage members and recovery from the protection panel. A removed
+9. Optionally manage members and recovery from the protection panel. Removing a
    member blocks writes until the new vault key has been packaged for every
    remaining target and committed.
 10. Lock the vault when finished. This clears the selected secret, reveal state,
-   form fields, generated values, and relevant in-memory sessions.
+    form fields, generated values, and relevant in-memory sessions.
 
 ## Supported secret types
 
@@ -122,10 +137,10 @@ live compromised process trustworthy.
 | Secure note | Recovery instructions or sensitive text |
 | API token | Service tokens with endpoint/account context |
 | SSH key | Private/public key material and passphrase |
-| OpenPGP key | Private/public key material and identity |
+| GPG key | Private/public key material and identity |
 | MFA secret | Seed and `otpauth` URI |
 | Certificate | X.509 certificate, private key, and passphrase |
-| Generic secret | Custom fields allowed by the generic schema |
+| Generic secret | A single protected value |
 
 The form model is checked against the canonical schema supplied by Keystead
 Core. Strict secret types reject unknown or incomplete protected fields rather
@@ -138,7 +153,8 @@ multi-device synchronization, not server-side decryption.
 
 Each device maintains two independent key roles:
 
-- a proof key signs the enrollment challenge and establishes possession;
+- a proof key signs the enrollment challenge and establishes possession of the
+  device;
 - a wrapping key receives a client-encrypted vault-key package.
 
 Only verified, non-revoked devices with complete approved wrapping material are
@@ -146,13 +162,13 @@ eligible for packages. Revoking a device stops future device-bound sessions and
 packages, but it cannot remove data that the device already decrypted or saved.
 
 Sync is revision based. Deletes travel as tombstones, and pages advance using a
-stored cursor. The client validates response shapes and fails closed on malformed
+stored revision. The client validates response shapes and fails closed on malformed
 lifecycle rows. A revision conflict does not overwrite the newer server row;
 the UI reports that a pull is required.
 
 ## Sharing and key rotation
 
-Sharing is whole-vault and device specific. An invitation alone carries no key.
+Sharing is whole-vault and device-specific. An invitation alone carries no key.
 After the recipient accepts, the membership waits in a pending state until an
 owner or administrator encrypts the current vault key separately for an
 eligible recipient device. The server stores that opaque package, and the
@@ -191,7 +207,8 @@ boundary.
 ### Offline recovery kit
 
 When you create a kit, the client generates recovery key material and an
-account-recovery credential. The server receives only the credential hash, the
+account-recovery credential. The client sends the credential to the server,
+which stores only a hash of it (never the raw credential), alongside the
 recovery public key, an encrypted recovery private key, and the vault key
 wrapped for that recovery enrollment. The displayed kit is a one-time handoff:
 store it offline, separate from the computer and server.
@@ -218,8 +235,9 @@ vault access is permanently lost by design.
 ## Reveal, clipboard, and local storage safety
 
 Reveal is deliberately separate from selecting a record. Pressing **Reveal**
-decrypts the default protected field for that record type and starts a bounded
-timer. **Copy** is available only while a value is revealed.
+decrypts the default protected field for that record type (for example, the
+password field of a login) and starts a bounded timer. **Copy** is available
+only while a value is revealed.
 
 Clipboard clearing is conditional: Keystead stores a SHA-256 digest and clears
 the clipboard at expiry only when the current contents still match. If you copy
@@ -271,8 +289,9 @@ On Windows:
 The default UI is configured for a local server at `http://localhost:8080`, but
 the server is optional for local-only vault use.
 
-The Compose build is configured to produce MSI, DMG, and DEB distributions on
-their corresponding desktop platforms.
+The Compose build is configured to produce MSI and DEB distributions on their
+corresponding desktop platforms; a macOS DMG will ship at the 1.0 standard
+release (jpackage's Dmg packager requires a MAJOR version above 0).
 
 ## Verification
 
