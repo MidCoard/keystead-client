@@ -85,7 +85,6 @@ internal object ZhStrings : Strings {
         DeviceUnlockState.DEVICE_LOGIN_NOT_ENABLED ->
             "此保险库未启用设备登录。请使用主密码打开。"
         DeviceUnlockState.LOADED -> "本机登录凭据已加载并可用。"
-        DeviceUnlockState.PASSPHRASE_REQUIRED -> "请输入本机登录口令。"
         DeviceUnlockState.BIOMETRIC_NOT_SELECTED -> "本机登录使用 Windows Hello。请在“本机登录”页面选择它。"
         DeviceUnlockState.BIOMETRIC_UNAVAILABLE -> "Windows Hello 不可用或尚未配置；Keystead 不会绕过验证。"
         DeviceUnlockState.BIOMETRIC_READY -> "Windows Hello 已就绪；打开保险库前将由 Windows 验证您。"
@@ -248,17 +247,11 @@ internal object ZhStrings : Strings {
     override val languageHelp = "选择界面语言，立即生效。"
     override val deleteVaultFile = "删除保险库文件…"
     override val deleteVaultFileHelp = "从这台电脑永久删除当前已打开的加密保险库文件。"
-    override val usePassphraseFile = "用密码加密"
     override val memoryOnly = "仅本次会话（内存）"
-    override val passphraseStorageDescription = "私钥在磁盘上加密——每次加载身份时需输入密码。"
     override val memoryStorageDescription = "私钥仅存于内存——明确锁定设备身份或退出应用后即丢失。"
-    override val deviceAccessIntro = "使用 Windows Hello 或单独的本机口令打开这个本地保险库。本机登录永远不会连接 Keystead 服务器。"
+    override val deviceAccessIntro = "使用 Windows Hello 打开这个本地保险库。本机登录永远不会连接 Keystead 服务器。"
     override val createProtectedIdentity = "设置 Windows Hello"
-    override val devicePassphraseFallbackHelp = "这是单独的本机登录口令，不是保险库主密码。"
-    override val localLoginPassphrase = "本机登录口令"
-    override val localLoginPassphraseHelp = "此口令只保护本机登录凭据，不是保险库主密码。"
     override val verifyLocalLogin = "使用 Windows Hello 验证"
-    override val loadLocalLogin = "加载本机登录"
     override val deviceLogin = "本机登录"
     override val deviceLoginEnabledLabel = "已启用"
     override val deviceLoginNotEnabledLabel = "未启用"
@@ -291,7 +284,6 @@ internal object ZhStrings : Strings {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello 不可用或尚未配置"
             DeviceProtectionProvider.UNKNOWN -> "此平台不提供生物验证保护"
         }
-    override val devicePassphraseProtectionLabel = "受单独的本机登录口令保护"
     override val notSet = "（未设置）"
     override val notSignedIn = "（未登录）"
     override val noneValue = "（无）"
@@ -309,7 +301,6 @@ internal object ZhStrings : Strings {
                 SecureStorageMode.BIOMETRIC ->
                     if (model.biometricActive) "已选：Windows Hello"
                     else "已选：Windows Hello（未激活）"
-                SecureStorageMode.PASSPHRASE_FILE -> "已选：口令加密身份文件"
                 SecureStorageMode.MEMORY_ONLY -> "已选：仅内存"
                 null -> "已选：尚未选择存储方式"
             }
@@ -442,6 +433,8 @@ internal object ZhStrings : Strings {
         "请先打开本地保险库，再加载或比较服务器记录。"
     override val currentRecordComparison = "当前 records 比较"
     override val serverRecordHistory = "服务器事件历史"
+    override val historyRemoveHelp =
+        "勾选任一事件即选中整条记录。移除将删除所选记录的全部服务器事件；本地记录保持不变。"
     override val recordIdentifierHash = "记录标识哈希"
     override val localContentHash = "本地事件哈希"
     override val serverComputedContentHash = "服务器事件哈希（本机计算）"

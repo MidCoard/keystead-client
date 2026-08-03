@@ -7,13 +7,11 @@ import kotlin.test.assertTrue
 import top.focess.keystead.client.i18n.AppLocale
 
 class DeviceUnlockUiModelTest {
-    private val passphraseDescriptor =
+    private val biometricDescriptor =
         LocalUnlockCredentialDescriptor(
-            LocalLoginPersistence.PASSPHRASE_FILE,
+            LocalLoginPersistence.BIOMETRIC,
             keyFingerprint = "local-credential",
         )
-    private val biometricDescriptor =
-        passphraseDescriptor.copy(persistence = LocalLoginPersistence.BIOMETRIC)
 
     @Test
     fun noDescriptorIsNotConfigured() {
@@ -39,24 +37,8 @@ class DeviceUnlockUiModelTest {
     }
 
     @Test
-    fun localPassphraseCredentialRequestsPassphrase() {
-        val model =
-            DeviceUnlockUiModel.derive(
-                passphraseDescriptor,
-                false,
-                null,
-                SecureStorageMode.PASSPHRASE_FILE,
-                BiometricAvailability.AVAILABLE,
-                deviceLoginAvailable = true,
-            )
-        assertEquals(DeviceUnlockState.PASSPHRASE_REQUIRED, model.state)
-        assertTrue(model.canLoad)
-        assertTrue(model.passphraseRequired)
-    }
-
-    @Test
     fun localBiometricCredentialSeparatesSelectionAvailabilityAndReadiness() {
-        val notSelected = DeviceUnlockUiModel.derive(biometricDescriptor, false, null, SecureStorageMode.PASSPHRASE_FILE, BiometricAvailability.AVAILABLE, true)
+        val notSelected = DeviceUnlockUiModel.derive(biometricDescriptor, false, null, SecureStorageMode.MEMORY_ONLY, BiometricAvailability.AVAILABLE, true)
         val unavailable = DeviceUnlockUiModel.derive(biometricDescriptor, false, null, SecureStorageMode.BIOMETRIC, BiometricAvailability.UNAVAILABLE, true)
         val ready = DeviceUnlockUiModel.derive(biometricDescriptor, false, null, SecureStorageMode.BIOMETRIC, BiometricAvailability.AVAILABLE, true)
 
@@ -65,6 +47,7 @@ class DeviceUnlockUiModelTest {
         assertEquals(DeviceUnlockState.BIOMETRIC_READY, ready.state)
         assertTrue(ready.canUnlock)
         assertTrue(VaultUnlockMethodPolicy.shouldOfferDeviceLogin(ready))
+        assertFalse(VaultUnlockMethodPolicy.shouldOfferDeviceLogin(unavailable))
     }
 
     @Test
@@ -120,22 +103,6 @@ class DeviceUnlockUiModelTest {
 
         assertEquals(VaultUnlockMethod.DEVICE_LOGIN, VaultUnlockMethodPolicy.defaultMethod(ready))
         assertEquals(VaultUnlockMethod.MASTER_PASSWORD, VaultUnlockMethodPolicy.defaultMethod(unavailable))
-    }
-
-    @Test
-    fun localLoginPassphraseCanSubmitLoadAndUnlockAsOneAction() {
-        val model =
-            DeviceUnlockUiModel.derive(
-                passphraseDescriptor,
-                credentialLoaded = false,
-                loadedPersistence = null,
-                selectedMode = SecureStorageMode.PASSPHRASE_FILE,
-                biometricAvailability = BiometricAvailability.AVAILABLE,
-                deviceLoginAvailable = true,
-            )
-
-        assertFalse(VaultUnlockMethodPolicy.canSubmitDeviceLogin(model, ""))
-        assertTrue(VaultUnlockMethodPolicy.canSubmitDeviceLogin(model, "identity-passphrase"))
     }
 
 }

@@ -9,28 +9,18 @@ import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.WRITE
-import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Properties
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
-import javax.crypto.Cipher
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
-import top.focess.keystead.crypto.CryptoException
 import top.focess.keystead.crypto.DefaultCryptoService
 import top.focess.keystead.crypto.DeviceKeyPair
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.KeyId
 
-enum class LocalLoginPersistence {
-    BIOMETRIC,
-    PASSPHRASE_FILE,
-}
+enum class LocalLoginPersistence { BIOMETRIC }
 
 data class LocalUnlockCredentialDescriptor(
     val persistence: LocalLoginPersistence,
@@ -110,10 +100,7 @@ class LocalUnlockCredentialManager(
             }
         }
 
-    fun loadOrCreate(
-        mode: SecureStorageMode,
-        passphrase: CharArray,
-    ): LocalUnlockCredential {
+    fun loadOrCreate(mode: SecureStorageMode): LocalUnlockCredential {
         require(mode != SecureStorageMode.MEMORY_ONLY) {
             "Local login must use persistent protected storage"
         }
@@ -125,19 +112,19 @@ class LocalUnlockCredentialManager(
                     check(descriptor.persistence == expected) {
                         "Local login protection cannot be changed after creation"
                     }
-                    loadUnlocked(descriptor.persistence, passphrase)
+                    loadUnlocked(descriptor.persistence)
                 } else {
-                    createUnlocked(expected, passphrase)
+                    createUnlocked(expected)
                 }
             adopt(loaded)
         }
     }
 
-    fun loadExisting(passphrase: CharArray): LocalUnlockCredential =
+    fun loadExisting(): LocalUnlockCredential =
         withCredentialLock {
             val descriptor =
                 descriptorUnlocked() ?: throw IllegalStateException("Local login is not configured")
-            adopt(loadUnlocked(descriptor.persistence, passphrase))
+            adopt(loadUnlocked(descriptor.persistence))
         }
 
     fun unload() {
@@ -179,7 +166,6 @@ class LocalUnlockCredentialManager(
 
     private fun createUnlocked(
         persistence: LocalLoginPersistence,
-        passphrase: CharArray,
     ): LocalUnlockCredential {
         crypto.generateDeviceKeyPair().use { pair ->
             val publicKey = pair.publicKey()
@@ -216,41 +202,6 @@ class LocalUnlockCredentialManager(
                             throw error
                         }
                     }
-                    LocalLoginPersistence.PASSPHRASE_FILE -> {
-                        require(passphrase.isNotEmpty()) {
-                            "Local login passphrase must not be empty"
-                        }
-                        val salt = randomBytes(SALT_BYTES)
-                        val nonce = randomBytes(GCM_NONCE_BYTES)
-                        val aad = localLoginAad(pair.keyAlgorithm(), publicKey)
-                        var wrappingKey = ByteArray(0)
-                        var encryptedPrivateKey = ByteArray(0)
-                        try {
-                            wrappingKey = deriveWrappingKey(passphrase, salt)
-                            encryptedPrivateKey =
-                                runCipher(
-                                    Cipher.ENCRYPT_MODE,
-                                    wrappingKey,
-                                    nonce,
-                                    privateKey,
-                                    aad,
-                                    "Could not protect local login credential",
-                                )
-                            properties.setProperty("kdfSalt", b64(salt))
-                            properties.setProperty("privateKeyNonce", b64(nonce))
-                            properties.setProperty(
-                                "encryptedPrivateKey",
-                                b64(encryptedPrivateKey),
-                            )
-                            writeProperties(properties)
-                        } finally {
-                            Wipe.wipe(salt)
-                            Wipe.wipe(nonce)
-                            Wipe.wipe(aad)
-                            Wipe.wipe(wrappingKey)
-                            Wipe.wipe(encryptedPrivateKey)
-                        }
-                    }
                 }
                 return LocalUnlockCredential(persistence, publicKey, privateKey)
             } finally {
@@ -262,7 +213,6 @@ class LocalUnlockCredentialManager(
 
     private fun loadUnlocked(
         persistence: LocalLoginPersistence,
-        passphrase: CharArray,
     ): LocalUnlockCredential {
         val properties = loadProperties()
         val keyAlgorithm = required(properties, "keyAlgorithm")
@@ -276,32 +226,6 @@ class LocalUnlockCredentialManager(
                             ?: throw IllegalStateException(
                                 "Biometric local login is incomplete",
                             )
-                    LocalLoginPersistence.PASSPHRASE_FILE -> {
-                        require(passphrase.isNotEmpty()) {
-                            "Local login passphrase must not be empty"
-                        }
-                        val salt = bytes(properties, "kdfSalt")
-                        val nonce = bytes(properties, "privateKeyNonce")
-                        val encrypted = bytes(properties, "encryptedPrivateKey")
-                        val aad = localLoginAad(keyAlgorithm, publicKey)
-                        val wrappingKey = deriveWrappingKey(passphrase, salt)
-                        try {
-                            runCipher(
-                                Cipher.DECRYPT_MODE,
-                                wrappingKey,
-                                nonce,
-                                encrypted,
-                                aad,
-                                "Could not unlock local login credential",
-                            )
-                        } finally {
-                            Wipe.wipe(salt)
-                            Wipe.wipe(nonce)
-                            Wipe.wipe(encrypted)
-                            Wipe.wipe(aad)
-                            Wipe.wipe(wrappingKey)
-                        }
-                    }
                 }
             verifyPair(publicKey, privateKey)
             LocalUnlockCredential(persistence, publicKey, privateKey)
@@ -350,36 +274,6 @@ class LocalUnlockCredentialManager(
         }
         return storage
     }
-
-    private fun deriveWrappingKey(passphrase: CharArray, salt: ByteArray): ByteArray {
-        val passwordCopy = passphrase.copyOf()
-        val spec = PBEKeySpec(passwordCopy, salt.copyOf(), KDF_ITERATIONS, KEY_BYTES * 8)
-        return try {
-            SecretKeyFactory.getInstance(KDF_ALGORITHM).generateSecret(spec).encoded
-        } catch (error: GeneralSecurityException) {
-            throw CryptoException("Could not derive local login wrapping key", error)
-        } finally {
-            Wipe.wipe(passwordCopy)
-            spec.clearPassword()
-        }
-    }
-
-    private fun runCipher(
-        mode: Int,
-        key: ByteArray,
-        nonce: ByteArray,
-        input: ByteArray,
-        aad: ByteArray,
-        errorMessage: String,
-    ): ByteArray =
-        try {
-            val cipher = Cipher.getInstance(CIPHER_ALGORITHM)
-            cipher.init(mode, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
-            cipher.updateAAD(aad)
-            cipher.doFinal(input)
-        } catch (error: GeneralSecurityException) {
-            throw CryptoException(errorMessage, error)
-        }
 
     private fun writeProperties(properties: Properties) {
         Files.createDirectories(directory)
@@ -439,13 +333,6 @@ class LocalUnlockCredentialManager(
 
     private companion object {
         const val FORMAT_VERSION = "1"
-        const val KDF_ALGORITHM = "PBKDF2WithHmacSHA256"
-        const val CIPHER_ALGORITHM = "AES/GCM/NoPadding"
-        const val KDF_ITERATIONS = 210_000
-        const val KEY_BYTES = 32
-        const val SALT_BYTES = 16
-        const val GCM_NONCE_BYTES = 12
-        const val GCM_TAG_BITS = 128
         const val LOCK_FILE_NAME = ".local-login.lock"
         val BIOMETRIC_KEY =
             SecureStorageKey("local-vault-login", "this-vault", "private-key")
@@ -458,7 +345,6 @@ internal const val LOCAL_UNLOCK_BINDING_ID = "local-vault-login-v1"
 private fun SecureStorageMode.toLocalLoginPersistence(): LocalLoginPersistence =
     when (this) {
         SecureStorageMode.BIOMETRIC -> LocalLoginPersistence.BIOMETRIC
-        SecureStorageMode.PASSPHRASE_FILE -> LocalLoginPersistence.PASSPHRASE_FILE
         SecureStorageMode.MEMORY_ONLY ->
             throw IllegalArgumentException("Local login cannot be memory-only")
     }

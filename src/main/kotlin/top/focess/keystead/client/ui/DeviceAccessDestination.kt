@@ -11,14 +11,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.BiometricAvailability
 import top.focess.keystead.client.DeviceAccessMode
@@ -32,26 +30,15 @@ import top.focess.keystead.client.i18n.LocalStrings
 internal fun LocalLoginPanel(
     secureStorage: SecureStorageUiModel,
     presentation: DeviceAccessPresentation,
-    passphrase: String,
-    onPassphraseChange: (String) -> Unit,
     credentialLoaded: Boolean,
     localLogin: DeviceLoginPresentation,
     onLoadCredential: () -> Unit,
     onCreateBiometricCredential: () -> Unit,
-    onCreatePassphraseCredential: () -> Unit,
     onRemoveLocalLogin: () -> Unit,
 ) {
     val strings = LocalStrings.current
     val biometricAvailable =
         secureStorage.biometricAvailability == BiometricAvailability.AVAILABLE
-    val passphraseSubmitReady = passphrase.isNotBlank()
-    val submitPassphrase = {
-        when (presentation.mode) {
-            DeviceAccessMode.BIOMETRIC_UNAVAILABLE -> onCreatePassphraseCredential()
-            DeviceAccessMode.PASSPHRASE -> onLoadCredential()
-            else -> Unit
-        }
-    }
 
     DestinationCard {
         SectionHeader(strings.destinationLabel(KeysteadDestination.DEVICE_ACCESS))
@@ -99,7 +86,6 @@ internal fun LocalLoginPanel(
                         strings.deviceProtectionAvailableLabel(presentation.provider)
                     DeviceAccessMode.BIOMETRIC_UNAVAILABLE ->
                         strings.deviceProtectionUnavailableLabel(presentation.provider)
-                    DeviceAccessMode.PASSPHRASE -> strings.devicePassphraseProtectionLabel
                 },
                 color =
                     if (presentation.mode == DeviceAccessMode.BIOMETRIC_UNAVAILABLE) {
@@ -110,25 +96,6 @@ internal fun LocalLoginPanel(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
             )
-
-            if (presentation.showPassphraseInput) {
-                OutlinedTextField(
-                    value = passphrase,
-                    onValueChange = onPassphraseChange,
-                    label = { Text(strings.localLoginPassphrase) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true,
-                    keyboardOptions = SubmitKeyboardOptions,
-                    keyboardActions =
-                        submitKeyboardActions(passphraseSubmitReady, submitPassphrase),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    strings.localLoginPassphraseHelp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
 
             when (presentation.mode) {
                 DeviceAccessMode.EXISTING_BIOMETRIC ->
@@ -149,24 +116,7 @@ internal fun LocalLoginPanel(
                     ) {
                         Text(strings.createProtectedIdentity)
                     }
-                DeviceAccessMode.BIOMETRIC_UNAVAILABLE ->
-                    Button(
-                        onClick = onCreatePassphraseCredential,
-                        enabled = passphrase.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(strings.usePassphraseFile)
-                    }
-                DeviceAccessMode.PASSPHRASE ->
-                    if (presentation.showPassphraseLoad) {
-                        Button(
-                            onClick = onLoadCredential,
-                            enabled = passphrase.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(strings.loadLocalLogin)
-                        }
-                    }
+                DeviceAccessMode.BIOMETRIC_UNAVAILABLE -> Unit
             }
             if (localLogin.canRemove) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

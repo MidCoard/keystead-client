@@ -170,7 +170,6 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     val serverAvailabilityChecker = remember { ServerAvailabilityChecker() }
     var serverAvailability by remember { mutableStateOf(ServerAvailability.CHECKING) }
     var serverCheckGeneration by remember { mutableStateOf(0L) }
-    var localLoginPassphrase by remember { mutableStateOf("") }
     var localUnlockCredential by remember { mutableStateOf<LocalUnlockCredential?>(null) }
     var deviceKeySlots by remember { mutableStateOf<List<DeviceKeySlot>>(emptyList()) }
     var deviceLoginAvailable by remember { mutableStateOf(false) }
@@ -777,81 +776,41 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     }
 
     fun loadLocalUnlockCredential(onError: ((String) -> Unit)? = null) {
-        val passphraseChars = localLoginPassphrase.toCharArray()
-        try {
-            runAction(onError = onError) {
-                val descriptor =
-                    localUnlockCredentialManager.descriptor()
-                        ?: throw IllegalStateException(strings.deviceLoginNotConfigured)
-                if (localUnlockStorageModel.selectedMode == null) {
-                    localUnlockStorageModel =
-                        localUnlockStorageViewModel.adoptExistingLocalLogin(
-                            descriptor.persistence,
-                        )
-                }
-                localUnlockCredential =
-                    localUnlockCredentialManager.loadExisting(passphraseChars)
-                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-                status =
-                    if (enableDeviceLoginIfReady()) {
-                        strings.deviceLoginEnabled
-                    } else {
-                        strings.localLoginReadyStatus
-                    }
+        runAction(onError = onError) {
+            val descriptor =
+                localUnlockCredentialManager.descriptor()
+                    ?: throw IllegalStateException(strings.deviceLoginNotConfigured)
+            if (localUnlockStorageModel.selectedMode == null) {
+                localUnlockStorageModel =
+                    localUnlockStorageViewModel.adoptExistingLocalLogin(
+                        descriptor.persistence,
+                    )
             }
-        } finally {
-            Wipe.wipe(passphraseChars)
-            localLoginPassphrase = ""
+            localUnlockCredential = localUnlockCredentialManager.loadExisting()
+            localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+            status =
+                if (enableDeviceLoginIfReady()) {
+                    strings.deviceLoginEnabled
+                } else {
+                    strings.localLoginReadyStatus
+                }
         }
     }
 
     fun createBiometricLocalLogin() {
-        val emptyPassphrase = charArrayOf()
-        try {
-            runAction {
-                check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
-                localUnlockStorageViewModel.selectBiometric()
-                localUnlockStorageModel = localUnlockStorageViewModel.model
-                localUnlockCredential =
-                    localUnlockCredentialManager.loadOrCreate(
-                        SecureStorageMode.BIOMETRIC,
-                        emptyPassphrase,
-                    )
-                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-                status =
-                    if (enableDeviceLoginIfReady()) {
-                        strings.deviceLoginEnabled
-                    } else {
-                        strings.localLoginReadyStatus
-                    }
-            }
-        } finally {
-            Wipe.wipe(emptyPassphrase)
-        }
-    }
-
-    fun createPassphraseLocalLogin() {
-        val passphraseChars = localLoginPassphrase.toCharArray()
-        try {
-            runAction {
-                check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
-                localUnlockStorageModel = localUnlockStorageViewModel.selectPassphrase()
-                localUnlockCredential =
-                    localUnlockCredentialManager.loadOrCreate(
-                        SecureStorageMode.PASSPHRASE_FILE,
-                        passphraseChars,
-                    )
-                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-                status =
-                    if (enableDeviceLoginIfReady()) {
-                        strings.deviceLoginEnabled
-                    } else {
-                        strings.localLoginReadyStatus
-                    }
-            }
-        } finally {
-            Wipe.wipe(passphraseChars)
-            localLoginPassphrase = ""
+        runAction {
+            check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
+            localUnlockStorageViewModel.selectBiometric()
+            localUnlockStorageModel = localUnlockStorageViewModel.model
+            localUnlockCredential =
+                localUnlockCredentialManager.loadOrCreate(SecureStorageMode.BIOMETRIC)
+            localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+            status =
+                if (enableDeviceLoginIfReady()) {
+                    strings.deviceLoginEnabled
+                } else {
+                    strings.localLoginReadyStatus
+                }
         }
     }
 
@@ -1496,13 +1455,10 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         LocalLoginPanel(
             secureStorage = localUnlockStorageModel,
             presentation = localPresentation,
-            passphrase = localLoginPassphrase,
-            onPassphraseChange = { localLoginPassphrase = it },
             credentialLoaded = localUnlockCredential != null,
             localLogin = localLoginPresentation,
             onLoadCredential = { loadLocalUnlockCredential() },
             onCreateBiometricCredential = { createBiometricLocalLogin() },
-            onCreatePassphraseCredential = { createPassphraseLocalLogin() },
             onRemoveLocalLogin = {
                 destructiveGate.request(DestructiveConfirmation.RemoveDeviceLogin)
             },
@@ -2021,7 +1977,6 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                     masterPassword = masterPassword,
                     errorMessage = unlockError,
                     deviceUnlock = deviceUnlockModel,
-                    devicePassphrase = localLoginPassphrase,
                     onVaultDirectoryChange = {
                         vaultDirectory = it
                         unlockError = null
@@ -2030,10 +1985,6 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                     onChooseNewVaultLocation = { chooseNewVaultFile() },
                     onMasterPasswordChange = {
                         masterPassword = it
-                        unlockError = null
-                    },
-                    onDevicePassphraseChange = {
-                        localLoginPassphrase = it
                         unlockError = null
                     },
                     onOpen = open@{

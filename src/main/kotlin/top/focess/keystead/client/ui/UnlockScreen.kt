@@ -50,12 +50,10 @@ fun UnlockScreen(
     masterPassword: String,
     errorMessage: String?,
     deviceUnlock: DeviceUnlockUiModel,
-    devicePassphrase: String,
     onVaultDirectoryChange: (String) -> Unit,
     onChooseExistingVault: () -> Unit,
     onChooseNewVaultLocation: () -> Unit,
     onMasterPasswordChange: (String) -> Unit,
-    onDevicePassphraseChange: (String) -> Unit,
     onOpen: () -> Unit,
     onOpenWithDeviceKey: () -> Unit,
 ) {
@@ -64,7 +62,7 @@ fun UnlockScreen(
     val defaultMethod = VaultUnlockMethodPolicy.defaultMethod(deviceUnlock)
     var unlockMethod by remember(defaultMethod) { mutableStateOf(defaultMethod) }
     val deviceLoginReady =
-        VaultUnlockMethodPolicy.canSubmitDeviceLogin(deviceUnlock, devicePassphrase)
+        VaultUnlockMethodPolicy.canSubmitDeviceLogin(deviceUnlock)
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Card(
             modifier =
@@ -141,19 +139,6 @@ fun UnlockScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                                if (deviceUnlock.passphraseRequired) {
-                                    OutlinedTextField(
-                                        devicePassphrase,
-                                        onDevicePassphraseChange,
-                                        label = { Text(strings.localLoginPassphrase) },
-                                        visualTransformation = PasswordVisualTransformation(),
-                                        singleLine = true,
-                                        keyboardOptions = SubmitKeyboardOptions,
-                                        keyboardActions =
-                                            submitKeyboardActions(deviceLoginReady, onOpenWithDeviceKey),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                }
                             }
                         }
                         Button(

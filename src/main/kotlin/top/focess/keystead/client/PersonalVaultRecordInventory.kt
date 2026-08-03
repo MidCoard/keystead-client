@@ -37,6 +37,7 @@ internal data class RecordComparisonEntry(
 
 internal data class RemoteRecordHistoryEntry(
     val serverSequence: Long,
+    val secretId: String,
     val recordHash: String,
     val revision: Long,
     val secretType: String,
@@ -77,6 +78,7 @@ internal data class PersonalVaultRecordInventory(
                         val computedContentHash = remote.contentHash()
                         RemoteRecordHistoryEntry(
                             serverSequence = remote.serverSequence,
+                            secretId = remote.secretId,
                             recordHash = RecordDisplayHash.of(remote.secretId),
                             revision = remote.revision,
                             secretType = remote.secretType,

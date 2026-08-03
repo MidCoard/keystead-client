@@ -6,7 +6,6 @@ enum class SecureStorageUiState {
     CHECKING,
     BIOMETRIC_AVAILABLE,
     BIOMETRIC_UNAVAILABLE,
-    PASSPHRASE_SELECTED,
     MEMORY_SELECTED,
 }
 
@@ -27,8 +26,6 @@ data class SecureStorageUiModel(
     val state: SecureStorageUiState
         get() =
             when {
-                selectedMode == SecureStorageMode.PASSPHRASE_FILE ->
-                    SecureStorageUiState.PASSPHRASE_SELECTED
                 selectedMode == SecureStorageMode.MEMORY_ONLY ->
                     SecureStorageUiState.MEMORY_SELECTED
                 biometricAvailability == BiometricAvailability.UNAVAILABLE ->
@@ -140,15 +137,6 @@ class SecureStorageViewModel internal constructor(
         return available.storage
     }
 
-    fun selectPassphrase(): SecureStorageUiModel {
-        clearSelectedMemory()
-        if (selected !== biometricCandidate?.storage) selected = null
-        selected = null
-        settings.save(PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null))
-        model = model.copy(selectedMode = SecureStorageMode.PASSPHRASE_FILE, biometricActive = false)
-        return model
-    }
-
     fun selectMemory(): SecureStorageUiModel {
         val memory = selected as? MemorySecureStorage ?: MemorySecureStorage()
         selected = memory
@@ -160,7 +148,6 @@ class SecureStorageViewModel internal constructor(
     fun adoptExistingLocalLogin(persistence: LocalLoginPersistence): SecureStorageUiModel {
         if (model.selectedMode != null) return model
         return when (persistence) {
-            LocalLoginPersistence.PASSPHRASE_FILE -> selectPassphrase()
             LocalLoginPersistence.BIOMETRIC -> {
                 if (model.biometricAvailability == BiometricAvailability.AVAILABLE) {
                     selectBiometric()

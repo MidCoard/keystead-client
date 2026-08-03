@@ -20,12 +20,10 @@ private fun lockedHomeWithoutRecoveryShortcut() {
         masterPassword = "",
         errorMessage = null,
         deviceUnlock = DeviceUnlockUiModel(DeviceUnlockState.NOT_CONFIGURED),
-        devicePassphrase = "",
         onVaultDirectoryChange = {},
         onChooseExistingVault = {},
         onChooseNewVaultLocation = {},
         onMasterPasswordChange = {},
-        onDevicePassphraseChange = {},
         onOpen = {},
         onOpenWithDeviceKey = {},
     )

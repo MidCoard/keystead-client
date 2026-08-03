@@ -87,7 +87,6 @@ internal object EnStrings : Strings {
         DeviceUnlockState.DEVICE_LOGIN_NOT_ENABLED ->
             "Device login is not enabled for this vault. Open it with the master password."
         DeviceUnlockState.LOADED -> "The local login credential is loaded and ready."
-        DeviceUnlockState.PASSPHRASE_REQUIRED -> "Enter the local login passphrase."
         DeviceUnlockState.BIOMETRIC_NOT_SELECTED -> "Local login uses Windows Hello. Select it on the Local login page."
         DeviceUnlockState.BIOMETRIC_UNAVAILABLE -> "Windows Hello is unavailable or not configured. Keystead will not bypass it."
         DeviceUnlockState.BIOMETRIC_READY -> "Windows Hello is ready. Windows will verify you before the vault opens."
@@ -258,20 +257,12 @@ internal object EnStrings : Strings {
     override val deleteVaultFile = "Delete vault file..."
     override val deleteVaultFileHelp =
         "Permanently removes the currently open encrypted vault file from this computer."
-    override val usePassphraseFile = "Encrypt with passphrase"
     override val memoryOnly = "Session only (RAM)"
-    override val passphraseStorageDescription = "Private key encrypted on disk — type a passphrase each time you load the identity."
     override val memoryStorageDescription = "Private key lives in RAM only and is discarded when you explicitly lock the identity or quit the app."
     override val deviceAccessIntro =
-        "Open this local vault with Windows Hello or a separate local passphrase. Local login never connects to Keystead Server."
+        "Open this local vault with Windows Hello. Local login never connects to Keystead Server."
     override val createProtectedIdentity = "Set up Windows Hello"
-    override val devicePassphraseFallbackHelp =
-        "This is a separate local-login passphrase, not your vault master password."
-    override val localLoginPassphrase = "Local login passphrase"
-    override val localLoginPassphraseHelp =
-        "This passphrase protects only the local login credential. It is not your vault master password."
     override val verifyLocalLogin = "Verify with Windows Hello"
-    override val loadLocalLogin = "Load local login"
     override val deviceLogin = "Local login"
     override val deviceLoginEnabledLabel = "Enabled"
     override val deviceLoginNotEnabledLabel = "Not enabled"
@@ -308,8 +299,6 @@ internal object EnStrings : Strings {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello is unavailable or not configured"
             DeviceProtectionProvider.UNKNOWN -> "Biometric protection is unavailable on this platform"
         }
-    override val devicePassphraseProtectionLabel =
-        "Protected by a separate local-login passphrase"
     override val notSet = "(not set)"
     override val notSignedIn = "(not signed in)"
     override val noneValue = "(none)"
@@ -327,8 +316,6 @@ internal object EnStrings : Strings {
                 SecureStorageMode.BIOMETRIC ->
                     if (model.biometricActive) "Selected: Windows Hello"
                     else "Selected: Windows Hello (inactive)"
-                SecureStorageMode.PASSPHRASE_FILE ->
-                    "Selected: passphrase-encrypted identity file"
                 SecureStorageMode.MEMORY_ONLY -> "Selected: memory only"
                 null -> "Selected: no storage mode"
             }
@@ -462,6 +449,8 @@ internal object EnStrings : Strings {
         "Open the local vault before loading or comparing server records."
     override val currentRecordComparison = "Current record comparison"
     override val serverRecordHistory = "Server event history"
+    override val historyRemoveHelp =
+        "Tick any event to select its whole record. Removal deletes all server events for the selected record(s); local records stay unchanged."
     override val recordIdentifierHash = "Record identifier hash"
     override val localContentHash = "Local event hash"
     override val serverComputedContentHash = "Server event hash (computed)"

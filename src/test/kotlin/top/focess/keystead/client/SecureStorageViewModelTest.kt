@@ -32,22 +32,6 @@ class SecureStorageViewModelTest {
     }
 
     @Test
-    fun existingPassphraseLocalLoginRestoresMissingSelection() {
-        val directory = Files.createTempDirectory("keystead-storage-adopt-passphrase")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
-        val viewModel = unavailableViewModel(settings)
-        viewModel.initialize(directory, "desktop")
-
-        val model = viewModel.adoptExistingLocalLogin(LocalLoginPersistence.PASSPHRASE_FILE)
-
-        assertEquals(SecureStorageMode.PASSPHRASE_FILE, model.selectedMode)
-        assertEquals(
-            PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null),
-            settings.load(),
-        )
-    }
-
-    @Test
     fun persistedBiometricSelectionActivatesAvailableStorage() {
         val directory = Files.createTempDirectory("keystead-storage-biometric")
         val settings = SecureStorageSettings(directory.resolve("selection.properties"))
@@ -98,7 +82,7 @@ class SecureStorageViewModelTest {
     }
 
     @Test
-    fun explicitFallbackSelectionsRemainAvailable() {
+    fun memoryFallbackSelectionRemainsAvailable() {
         val directory = Files.createTempDirectory("keystead-storage-fallback")
         val settings = SecureStorageSettings(directory.resolve("selection.properties"))
         val viewModel = unavailableViewModel(settings)
@@ -106,8 +90,6 @@ class SecureStorageViewModelTest {
 
         assertEquals(SecureStorageMode.MEMORY_ONLY, viewModel.selectMemory().selectedMode)
         assertIs<MemorySecureStorage>(viewModel.selectedStorage())
-        assertEquals(SecureStorageMode.PASSPHRASE_FILE, viewModel.selectPassphrase().selectedMode)
-        assertEquals(null, viewModel.selectedStorage())
     }
 
     private fun unavailableViewModel(settings: SecureStorageSettings) =

@@ -61,11 +61,10 @@ class DeviceAccessPresentationTest {
         assertEquals(DeviceAccessMode.EXISTING_BIOMETRIC, presentation.mode)
         assertEquals(DeviceProtectionProvider.WINDOWS_HELLO, presentation.provider)
         assertFalse(presentation.showBiometricCreate)
-        assertFalse(presentation.showPassphraseInput)
     }
 
     @Test
-    fun newLoginPrefersBiometricsAndFallsBackToPassphrase() {
+    fun newLoginPrefersBiometricsAndShowsUnavailableWhenAbsent() {
         val biometric =
             DeviceAccessPresentation.derive(
                 SecureStorageUiModel(
@@ -90,34 +89,7 @@ class DeviceAccessPresentationTest {
         assertEquals(DeviceAccessMode.NEW_BIOMETRIC, biometric.mode)
         assertTrue(biometric.showBiometricCreate)
         assertEquals(DeviceAccessMode.BIOMETRIC_UNAVAILABLE, fallback.mode)
-        assertTrue(fallback.showPassphraseInput)
-        assertTrue(fallback.showPassphraseCreate)
+        assertFalse(fallback.showBiometricCreate)
     }
 
-    @Test
-    fun passphraseLoginOffersLoadOnlyWhileLocked() {
-        val locked =
-            DeviceAccessPresentation.derive(
-                SecureStorageUiModel(
-                    SecureStorageMode.PASSPHRASE_FILE,
-                    BiometricAvailability.AVAILABLE,
-                ),
-                LocalLoginPersistence.PASSPHRASE_FILE,
-                credentialLoaded = false,
-            )
-        val loaded =
-            DeviceAccessPresentation.derive(
-                SecureStorageUiModel(
-                    SecureStorageMode.PASSPHRASE_FILE,
-                    BiometricAvailability.AVAILABLE,
-                ),
-                LocalLoginPersistence.PASSPHRASE_FILE,
-                credentialLoaded = true,
-            )
-
-        assertTrue(locked.showPassphraseInput)
-        assertTrue(locked.showPassphraseLoad)
-        assertFalse(loaded.showPassphraseInput)
-        assertFalse(loaded.showPassphraseLoad)
-    }
 }

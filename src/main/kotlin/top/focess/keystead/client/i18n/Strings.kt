@@ -151,17 +151,11 @@ internal interface Strings {
     val languageHelp: String
     val deleteVaultFile: String
     val deleteVaultFileHelp: String
-    val usePassphraseFile: String
     val memoryOnly: String
-    val passphraseStorageDescription: String
     val memoryStorageDescription: String
     val deviceAccessIntro: String
     val createProtectedIdentity: String
-    val devicePassphraseFallbackHelp: String
-    val localLoginPassphrase: String
-    val localLoginPassphraseHelp: String
     val verifyLocalLogin: String
-    val loadLocalLogin: String
     val deviceLogin: String
     val deviceLoginEnabledLabel: String
     val deviceLoginNotEnabledLabel: String
@@ -181,7 +175,6 @@ internal interface Strings {
     fun deviceProtectionLabel(provider: DeviceProtectionProvider): String
     fun deviceProtectionAvailableLabel(provider: DeviceProtectionProvider): String
     fun deviceProtectionUnavailableLabel(provider: DeviceProtectionProvider): String
-    val devicePassphraseProtectionLabel: String
     val notSet: String
     val notSignedIn: String
     val noneValue: String
@@ -292,6 +285,7 @@ internal interface Strings {
     val unlockVaultToCompare: String
     val currentRecordComparison: String
     val serverRecordHistory: String
+    val historyRemoveHelp: String
     val recordIdentifierHash: String
     val localContentHash: String
     val serverComputedContentHash: String

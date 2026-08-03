@@ -143,6 +143,7 @@ internal fun SyncPanel(
             RecordInventory(
                 inventory = inventory,
                 actionsEnabled = vaultOpen && serverReady,
+                historyActionsEnabled = serverReady,
                 localRecordTitles = localRecordTitles,
                 onUploadSelected = onUploadSelected,
                 onRequestRemoveSelected = onRequestRemoveSelected,
@@ -155,6 +156,7 @@ internal fun SyncPanel(
 private fun RecordInventory(
     inventory: PersonalVaultRecordInventory,
     actionsEnabled: Boolean,
+    historyActionsEnabled: Boolean,
     localRecordTitles: Map<String, String>,
     onUploadSelected: (Set<String>) -> Unit,
     onRequestRemoveSelected: (Set<String>) -> Unit,
@@ -174,6 +176,17 @@ private fun RecordInventory(
     LaunchedEffect(choices) {
         selection = selection.reconcile(choices)
     }
+    val historyChoices =
+        inventory.remoteHistory.map {
+            SyncRecordChoice(secretId = it.secretId, canUpload = false, canRemoveFromServer = true)
+        }
+    var historySelection by remember(inventory.localFingerprint, inventory.serverFingerprint) {
+        mutableStateOf(SyncRecordSelection())
+    }
+    LaunchedEffect(historyChoices) {
+        historySelection = historySelection.reconcile(historyChoices)
+    }
+    val removableHistoryIds = historySelection.removableIds(historyChoices)
     val currentRemoteCount = inventory.remoteHistory.map { it.recordHash }.distinct().size
     if (inventory.remoteHistory.isEmpty()) {
         Text(
@@ -317,12 +330,51 @@ private fun RecordInventory(
 
     if (inventory.remoteHistory.isNotEmpty()) {
         GroupLabel(strings.serverRecordHistory)
+        Text(
+            strings.historyRemoveHelp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(
+                onClick = { historySelection = historySelection.selectAll(historyChoices) },
+                enabled = historyChoices.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(strings.selectAllRecords)
+            }
+            OutlinedButton(
+                onClick = { historySelection = historySelection.clear() },
+                enabled = historySelection.selectedIds.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(strings.clearRecordSelection)
+            }
+        }
+        OutlinedButton(
+            onClick = { onRequestRemoveSelected(removableHistoryIds) },
+            enabled = historyActionsEnabled && removableHistoryIds.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+            colors =
+                ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+        ) {
+            Text(strings.removeSelectedServerCopies(removableHistoryIds.size))
+        }
         LazyColumn(
             modifier = Modifier.fillMaxWidth().height(420.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(inventory.remoteHistory, key = { it.serverSequence }) { entry ->
-                HistoryRow(entry)
+                HistoryRow(
+                    entry = entry,
+                    selected = entry.secretId in historySelection.selectedIds,
+                    onSelectedChange = { historySelection = historySelection.toggle(entry.secretId) },
+                )
             }
         }
     }
@@ -427,7 +479,11 @@ private fun ComparisonRow(
 }
 
 @Composable
-private fun HistoryRow(entry: RemoteRecordHistoryEntry) {
+private fun HistoryRow(
+    entry: RemoteRecordHistoryEntry,
+    selected: Boolean,
+    onSelectedChange: () -> Unit,
+) {
     val strings = LocalStrings.current
     val accent =
         if (entry.hashValid) MaterialTheme.colorScheme.outline
@@ -444,10 +500,13 @@ private fun HistoryRow(entry: RemoteRecordHistoryEntry) {
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                Checkbox(checked = selected, onCheckedChange = { onSelectedChange() })
                 Text(
                     secretTypeLabel(entry.secretType),
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )

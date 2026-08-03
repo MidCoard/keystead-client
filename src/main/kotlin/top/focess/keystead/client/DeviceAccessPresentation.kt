@@ -4,7 +4,6 @@ enum class DeviceAccessMode {
     EXISTING_BIOMETRIC,
     NEW_BIOMETRIC,
     BIOMETRIC_UNAVAILABLE,
-    PASSPHRASE,
 }
 
 enum class DeviceLoginState {
@@ -62,9 +61,6 @@ data class DeviceAccessPresentation(
     val mode: DeviceAccessMode,
     val provider: DeviceProtectionProvider,
     val showBiometricCreate: Boolean,
-    val showPassphraseInput: Boolean,
-    val showPassphraseCreate: Boolean,
-    val showPassphraseLoad: Boolean = false,
 ) {
     companion object {
         fun derive(
@@ -81,17 +77,6 @@ data class DeviceAccessPresentation(
                         DeviceAccessMode.EXISTING_BIOMETRIC,
                         provider,
                         showBiometricCreate = false,
-                        showPassphraseInput = false,
-                        showPassphraseCreate = false,
-                    )
-                LocalLoginPersistence.PASSPHRASE_FILE ->
-                    DeviceAccessPresentation(
-                        DeviceAccessMode.PASSPHRASE,
-                        provider,
-                        showBiometricCreate = false,
-                        showPassphraseInput = !credentialLoaded,
-                        showPassphraseCreate = false,
-                        showPassphraseLoad = !credentialLoaded,
                     )
                 null ->
                     if (biometricAvailable) {
@@ -99,16 +84,12 @@ data class DeviceAccessPresentation(
                             DeviceAccessMode.NEW_BIOMETRIC,
                             provider,
                             showBiometricCreate = true,
-                            showPassphraseInput = false,
-                            showPassphraseCreate = false,
                         )
                     } else {
                         DeviceAccessPresentation(
                             DeviceAccessMode.BIOMETRIC_UNAVAILABLE,
                             provider,
                             showBiometricCreate = false,
-                            showPassphraseInput = true,
-                            showPassphraseCreate = true,
                         )
                     }
             }
