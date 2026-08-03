@@ -97,7 +97,6 @@ internal object KeysteadRailPresentation {
         when (destination) {
             KeysteadDestination.RECOVERY,
             KeysteadDestination.ACCOUNT,
-            KeysteadDestination.SHARE,
             KeysteadDestination.SETTINGS,
             -> true
             else -> false

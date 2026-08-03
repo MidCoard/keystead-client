@@ -1609,7 +1609,8 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     }
 
     LaunchedEffect(serverAuthSession, serverAvailability, currentDestination) {
-        if (serverAuthSession != null &&
+        if (session != null &&
+            serverAuthSession != null &&
             serverAvailability.isOnline &&
             currentDestination == top.focess.keystead.client.ui.KeysteadDestination.SHARE
         ) {

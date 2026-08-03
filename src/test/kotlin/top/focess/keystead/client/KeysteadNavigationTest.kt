@@ -75,7 +75,7 @@ class KeysteadNavigationTest {
                 destination = KeysteadDestination.SYNC,
             ),
         )
-        assertTrue(
+        assertFalse(
             KeysteadRailPresentation.destinationEnabled(
                 vaultOpen = false,
                 destination = KeysteadDestination.SHARE,
@@ -109,7 +109,7 @@ class KeysteadNavigationTest {
                 destination = KeysteadDestination.SYNC,
             ),
         )
-        assertFalse(
+        assertTrue(
             KeysteadRailPresentation.usesUnlockContent(
                 vaultOpen = false,
                 destination = KeysteadDestination.SHARE,
