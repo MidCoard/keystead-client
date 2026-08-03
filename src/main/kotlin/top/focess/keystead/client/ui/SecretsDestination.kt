@@ -27,14 +27,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,22 +55,15 @@ import top.focess.keystead.client.SecretGrouper
 import top.focess.keystead.client.SecretGroupingMode
 import top.focess.keystead.client.SecretListItem
 import top.focess.keystead.client.SecretListQuery
+import top.focess.keystead.client.i18n.LocalStrings
+import top.focess.keystead.client.i18n.Strings
 import top.focess.keystead.model.SecretType
 
-internal fun typeLabel(type: String): String =
-    SecretFormModel.specForOrNull(SecretType.valueOf(type))?.label ?: "Login"
+internal fun typeLabel(type: String, strings: Strings): String =
+    strings.secretTypeLabel(SecretType.valueOf(type))
 
-internal fun shortTypeLabel(type: String): String =
-    when (SecretType.valueOf(type)) {
-        SecretType.LOGIN_PASSWORD -> "Login"
-        SecretType.SSH_KEY -> "SSH"
-        SecretType.API_TOKEN -> "API"
-        SecretType.GPG_KEY -> "GPG"
-        SecretType.MFA_SECRET -> "MFA"
-        SecretType.CERTIFICATE -> "Cert"
-        SecretType.GENERIC_SECRET -> "Generic"
-        SecretType.SECURE_NOTE -> "Note"
-    }
+internal fun shortTypeLabel(type: String, strings: Strings): String =
+    strings.shortSecretTypeLabel(SecretType.valueOf(type))
 
 internal fun SecretListQuery.hasFilters(): Boolean =
     text.isNotBlank() ||
@@ -98,38 +87,45 @@ internal fun SecretListPanel(
     onGroupingChange: (SecretGroupingMode) -> Unit,
     selectedSecretId: String?,
     onSelect: (String) -> Unit,
+    onAddSecret: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val strings = LocalStrings.current
     var filtersExpanded by remember { mutableStateOf(false) }
     DestinationCard(modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Secrets",
+                    strings.secretsTitle,
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "${secrets.size} of $totalSecretCount shown",
+                    strings.secretsShown(secrets.size, totalSecretCount),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = { filtersExpanded = !filtersExpanded }) {
-                Icon(
-                    if (filtersExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(4.dp))
-                Text("Filters")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { filtersExpanded = !filtersExpanded }) {
+                    Icon(
+                        if (filtersExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(strings.filters)
+                }
+                Button(onClick = onAddSecret) {
+                    Text(strings.newSecret)
+                }
             }
         }
         OutlinedTextField(
             query.text,
             onQueryTextChange,
-            label = { Text("Search") },
+            label = { Text(strings.search) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -164,7 +160,7 @@ internal fun SecretListPanel(
                 }
             }
         } else {
-            val groups = remember(secrets, groupingMode) { SecretGrouper.group(secrets, groupingMode) }
+            val groups = remember(secrets, groupingMode) { SecretGrouper.group(secrets, groupingMode, strings) }
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.weight(1f),
@@ -184,16 +180,17 @@ internal fun SecretListPanel(
 
 @Composable
 private fun TypeFilterChips(selectedType: String?, onTypeChange: (String?) -> Unit) {
+    val strings = LocalStrings.current
     val typeNames = listOf<String?>(null) + SecretFormModel.supportedTypes.map { it.name }
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         typeNames.forEach { typeName ->
-            FilterChip(
+            KeysteadChoiceChip(
                 selected = selectedType == typeName,
                 onClick = { onTypeChange(typeName) },
-                label = { Text(typeName?.let(::shortTypeLabel) ?: "All") },
+                label = { Text(typeName?.let { shortTypeLabel(it, strings) } ?: strings.all) },
             )
         }
     }
@@ -209,19 +206,20 @@ private fun AdvancedFilters(
     groupingMode: SecretGroupingMode,
     onGroupingChange: (SecretGroupingMode) -> Unit,
 ) {
+    val strings = LocalStrings.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedTextField(
                 query.category,
                 onCategoryChange,
-                label = { Text("Category") },
+                label = { Text(strings.fieldCategory) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
             OutlinedTextField(
                 query.provider,
                 onProviderChange,
-                label = { Text("Provider") },
+                label = { Text(strings.fieldProvider) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -229,7 +227,7 @@ private fun AdvancedFilters(
         OutlinedTextField(
             query.software,
             onSoftwareChange,
-            label = { Text("Software") },
+            label = { Text(strings.fieldSoftware) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -239,7 +237,7 @@ private fun AdvancedFilters(
             enabled = query.hasFilters(),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Clear filters")
+            Text(strings.clearFilters)
         }
     }
 }
@@ -249,15 +247,19 @@ private fun SecretGroupingSelector(
     selected: SecretGroupingMode,
     onGroupingChange: (SecretGroupingMode) -> Unit,
 ) {
+    val strings = LocalStrings.current
     val modes = SecretGroupingMode.entries
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        modes.forEachIndexed { index, mode ->
-            SegmentedButton(
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        modes.forEach { mode ->
+            KeysteadChoiceChip(
                 selected = selected == mode,
                 onClick = { onGroupingChange(mode) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                modifier = Modifier.weight(1f),
             ) {
-                Text(mode.label)
+                Text(strings.groupingLabel(mode))
             }
         }
     }
@@ -277,6 +279,7 @@ private fun GroupHeader(label: String, count: Int) {
 
 @Composable
 private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> Unit) {
+    val strings = LocalStrings.current
     val expiryState = SecretExpiry.state(secret.expiry)
     val expiryBadge =
         if (expiryState != null && expiryState.status != SecretExpiryStatus.ACTIVE) {
@@ -285,8 +288,8 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
             null
         }
     val rowDescription = buildString {
-        append("Secret: ${secret.title}, ${typeLabel(secret.type)}")
-        expiryBadge?.let { append(", ${it.label()}") }
+        append(strings.secretRowLabel(secret.title, typeLabel(secret.type, strings)))
+        expiryBadge?.let { append(", ${it.label(strings)}") }
     }
     Card(
         modifier =
@@ -319,7 +322,7 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
                         )
             )
             Spacer(Modifier.width(12.dp))
-            TypeBadge(shortTypeLabel(secret.type))
+            TypeBadge(shortTypeLabel(secret.type, strings))
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -331,13 +334,13 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${typeLabel(secret.type)} · ${secret.id.take(8)}",
+                    "${typeLabel(secret.type, strings)} · ${secret.id.take(8)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (expiryBadge != null) {
                     Text(
-                        expiryBadge.label(),
+                        expiryBadge.label(strings),
                         color =
                             if (expiryBadge.status == SecretExpiryStatus.EXPIRED) {
                                 MaterialTheme.colorScheme.error
@@ -355,22 +358,20 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
 
 @Composable
 private fun EmptyState() {
+    val strings = LocalStrings.current
     Column(
         modifier = Modifier.fillMaxWidth().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("No saved secrets", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-        Text("Saved secrets will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(strings.noSavedSecrets, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+        Text(strings.savedSecretsAppearHere, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 private fun ExpiryReminderBanner(expiredCount: Int, dueSoonCount: Int) {
-    val parts = buildList {
-        if (expiredCount > 0) add("$expiredCount expired")
-        if (dueSoonCount > 0) add("$dueSoonCount expiring soon")
-    }
+    val strings = LocalStrings.current
     Surface(
         color = MaterialTheme.colorScheme.tertiaryContainer,
         shape = MaterialTheme.shapes.medium,
@@ -381,12 +382,12 @@ private fun ExpiryReminderBanner(expiredCount: Int, dueSoonCount: Int) {
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                "Expiry reminders: ${parts.joinToString(", ")}",
+                strings.expiryReminders(expiredCount, dueSoonCount),
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "Review and rotate these secrets.",
+                strings.expiryReviewRotate,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -402,6 +403,7 @@ fun InspectorPanel(
     totpCode: String,
     totpSecondsRemaining: Int,
     onReveal: () -> Unit,
+    onHide: () -> Unit,
     onCopy: () -> Unit,
     onToggleTotpCode: () -> Unit,
     onCopyTotpCode: () -> Unit,
@@ -409,25 +411,24 @@ fun InspectorPanel(
     onEdit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val strings = LocalStrings.current
     DestinationCard(modifier = modifier.fillMaxHeight()) {
-        SectionHeader("Selected secret")
+        SectionHeader(strings.selectedSecret)
         if (selectedSecret == null) {
             EmptyInspector()
             return@DestinationCard
         }
         val type = SecretType.valueOf(selectedSecret.type)
         val revealLabel =
-            if (type == SecretType.LOGIN_PASSWORD) "Password"
-            else SecretFormModel.specFor(type).fields
-                .first { it.name == SecretFormModel.specFor(type).revealFieldName }
-                .label
+            if (type == SecretType.LOGIN_PASSWORD) strings.fieldPassword
+            else strings.secretFieldLabel(SecretFormModel.specFor(type).revealFieldName)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            TypeBadge(shortTypeLabel(selectedSecret.type))
+            TypeBadge(shortTypeLabel(selectedSecret.type, strings))
             Text(
-                typeLabel(selectedSecret.type),
+                typeLabel(selectedSecret.type, strings),
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -461,7 +462,7 @@ fun InspectorPanel(
             )
         }
         if (type == SecretType.MFA_SECRET) {
-            SectionHeader("Current code")
+            SectionHeader(strings.currentCode)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -475,7 +476,7 @@ fun InspectorPanel(
                     modifier =
                         Modifier.semantics {
                             contentDescription =
-                                if (showTotpCode) "Authentication code shown" else "Authentication code hidden"
+                                if (showTotpCode) strings.authCodeShown else strings.authCodeHidden
                         },
                 )
                 Text(
@@ -490,34 +491,39 @@ fun InspectorPanel(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onToggleTotpCode, modifier = Modifier.weight(1f)) {
-                    Text(if (showTotpCode) "Hide code" else "Show code")
+                    Text(if (showTotpCode) strings.hideCode else strings.showCode)
                 }
                 OutlinedButton(
                     onClick = onCopyTotpCode,
                     enabled = showTotpCode && totpCode.isNotEmpty(),
                     modifier = Modifier.weight(1f),
-                ) { Text("Copy code") }
+                ) { Text(strings.copyCode) }
             }
         }
         OutlinedTextField(
             value = revealedValue,
             onValueChange = {},
             label = { Text(revealLabel) },
+            placeholder = { Text("••••••") },
             readOnly = true,
             singleLine = true,
             textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace),
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onReveal, modifier = Modifier.weight(1f)) { Text("Reveal") }
+            val revealed = revealedValue.isNotEmpty()
+            Button(
+                onClick = if (revealed) onHide else onReveal,
+                modifier = Modifier.weight(1f),
+            ) { Text(if (revealed) strings.hide else strings.reveal) }
             OutlinedButton(
                 onClick = onCopy,
-                enabled = revealedValue.isNotEmpty(),
+                enabled = revealed,
                 modifier = Modifier.weight(1f),
-            ) { Text("Copy") }
+            ) { Text(strings.copy) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("Edit") }
+            OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text(strings.edit) }
             TextButton(
                 onClick = onDelete,
                 modifier = Modifier.weight(1f),
@@ -525,13 +531,14 @@ fun InspectorPanel(
                     ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
                     ),
-            ) { Text("Delete") }
+            ) { Text(strings.delete) }
         }
     }
 }
 
 @Composable
 private fun EmptyInspector() {
+    val strings = LocalStrings.current
     Column(
         modifier = Modifier.fillMaxWidth().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -543,7 +550,7 @@ private fun EmptyInspector() {
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(32.dp),
         )
-        Text("No secret selected", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-        Text("Select a secret from the list.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(strings.noSecretSelected, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+        Text(strings.selectASecret, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

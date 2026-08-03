@@ -7,18 +7,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.SecretFormModel
+import top.focess.keystead.client.i18n.LocalStrings
 import top.focess.keystead.model.SecretType
 
 @Composable
@@ -56,6 +59,7 @@ fun AddSecretPanel(
     onSave: () -> Unit,
     editing: Boolean,
 ) {
+    val strings = LocalStrings.current
     val spec = SecretFormModel.specForOrNull(selectedType)
     val categoryValue = category.ifBlank { spec?.defaultCategory.orEmpty() }
     val providerValue = provider.ifBlank { spec?.defaultProvider.orEmpty() }
@@ -70,19 +74,26 @@ fun AddSecretPanel(
                     SecretFormModel.fieldValues(spec, structuredFields),
                 )
         }
-    DestinationCard {
+    DestinationCard(
+        modifier = Modifier.submitOnCtrlEnter(enabled && canSave, onSave),
+    ) {
         Text(
-            if (editing) "Edit secret" else "New secret",
+            if (editing) strings.editSecret else strings.newSecret,
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            strings.requiredFieldsMarked,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         TypeSelector(selectedType, onSelectedTypeChange, enabled)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 title,
                 onTitleChange,
-                label = { Text("Title") },
+                label = { RequiredFieldLabel(strings.fieldTitle) },
                 enabled = enabled,
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -91,7 +102,7 @@ fun AddSecretPanel(
                 OutlinedTextField(
                     url,
                     onUrlChange,
-                    label = { Text("URL") },
+                    label = { Text(strings.fieldUrl) },
                     enabled = enabled,
                     singleLine = true,
                     modifier = Modifier.weight(1f),
@@ -110,34 +121,39 @@ fun AddSecretPanel(
         } else if (spec != null) {
             if (selectedType == SecretType.API_TOKEN) {
                 OutlinedButton(onClick = onGenerateApiToken, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-                    Text("Generate API token")
+                    Text(strings.generateApiToken)
                 }
             }
             if (selectedType == SecretType.SSH_KEY) {
                 OutlinedButton(onClick = onGenerateSshKey, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-                    Text("Generate SSH key")
+                    Text(strings.generateSshKey)
                 }
             }
             if (selectedType == SecretType.GPG_KEY) {
                 OutlinedButton(onClick = onGenerateGpgKey, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-                    Text("Generate GPG key")
+                    Text(strings.generateGpgKey)
                 }
             }
             if (selectedType == SecretType.CERTIFICATE) {
                 OutlinedButton(onClick = onGenerateCertificate, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-                    Text("Generate certificate")
+                    Text(strings.generateCertificate)
                 }
             }
             if (selectedType == SecretType.MFA_SECRET) {
                 OutlinedButton(onClick = onGenerateMfaSecret, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-                    Text("Generate MFA secret")
+                    Text(strings.generateMfaSecret)
                 }
             }
+            Text(
+                strings.atLeastOneFieldRequired,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             spec.fields.forEach { field ->
                 OutlinedTextField(
                     structuredFields[field.name].orEmpty(),
                     { onStructuredFieldChange(field.name, it) },
-                    label = { Text(field.label) },
+                    label = { Text(strings.secretFieldLabel(field.name)) },
                     enabled = enabled,
                     visualTransformation =
                         if (field.secret) PasswordVisualTransformation()
@@ -152,7 +168,7 @@ fun AddSecretPanel(
             OutlinedTextField(
                 categoryValue,
                 onCategoryChange,
-                label = { Text("Category") },
+                label = { Text(strings.fieldCategory) },
                 enabled = enabled,
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -160,7 +176,7 @@ fun AddSecretPanel(
             OutlinedTextField(
                 providerValue,
                 onProviderChange,
-                label = { Text("Provider") },
+                label = { Text(strings.fieldProvider) },
                 enabled = enabled,
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -170,7 +186,7 @@ fun AddSecretPanel(
             OutlinedTextField(
                 softwareValue,
                 onSoftwareChange,
-                label = { Text("Software") },
+                label = { Text(strings.fieldSoftware) },
                 enabled = enabled,
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -178,7 +194,7 @@ fun AddSecretPanel(
             OutlinedTextField(
                 account,
                 onAccountChange,
-                label = { Text("Account") },
+                label = { Text(strings.fieldAccount) },
                 enabled = enabled,
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -187,16 +203,22 @@ fun AddSecretPanel(
         OutlinedTextField(
             expiry,
             onExpiryChange,
-            label = { Text("Expiry (optional, YYYY-MM-DD)") },
+            label = { Text(strings.fieldExpiry) },
             enabled = enabled,
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(onClick = onSave, enabled = enabled && canSave, modifier = Modifier.weight(1f)) {
-                Text(if (!enabled) "Open vault first" else if (editing) "Update selected" else "Save secret")
+                Text(
+                    when {
+                        !enabled -> strings.openVaultFirst
+                        editing -> strings.updateSelected
+                        else -> strings.saveSecret
+                    }
+                )
             }
-            OutlinedButton(onClick = onCancel, enabled = enabled, modifier = Modifier.weight(1f)) { Text("Cancel / Clear") }
+            OutlinedButton(onClick = onCancel, enabled = enabled, modifier = Modifier.weight(1f)) { Text(strings.cancelClear) }
         }
     }
 }
@@ -207,17 +229,18 @@ private fun TypeSelector(
     onSelectedTypeChange: (SecretType) -> Unit,
     enabled: Boolean,
 ) {
+    val strings = LocalStrings.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SecretFormModel.supportedTypes.chunked(4).forEach { rowTypes ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 rowTypes.forEach { type ->
-                    FilterChip(
+                    KeysteadChoiceChip(
                         selected = type == selectedType,
                         onClick = { onSelectedTypeChange(type) },
                         enabled = enabled,
                         label = {
                             Text(
-                                SecretFormModel.specForOrNull(type)?.label ?: "Login",
+                                strings.secretTypeLabel(type),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -242,10 +265,11 @@ private fun LoginSecretFields(
     onPasswordChange: (String) -> Unit,
     onGeneratePassword: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     OutlinedTextField(
         username,
         onUsernameChange,
-        label = { Text("Username") },
+        label = { Text(strings.fieldUsername) },
         enabled = enabled,
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
@@ -254,14 +278,28 @@ private fun LoginSecretFields(
         OutlinedTextField(
             password,
             onPasswordChange,
-            label = { Text("Password") },
+            label = { RequiredFieldLabel(strings.fieldPassword) },
             enabled = enabled,
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
         OutlinedButton(onClick = onGeneratePassword, enabled = enabled, modifier = Modifier.width(128.dp)) {
-            Text("Generate")
+            Text(strings.generate)
         }
     }
+}
+
+@Composable
+private fun RequiredFieldLabel(text: String) {
+    val errorColor = MaterialTheme.colorScheme.error
+    Text(
+        buildAnnotatedString {
+            append(text)
+            append(" ")
+            withStyle(SpanStyle(color = errorColor)) {
+                append("*")
+            }
+        },
+    )
 }

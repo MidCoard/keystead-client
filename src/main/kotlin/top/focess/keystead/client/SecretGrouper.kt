@@ -1,12 +1,14 @@
 package top.focess.keystead.client
 
+import top.focess.keystead.client.i18n.EnStrings
+import top.focess.keystead.client.i18n.Strings
 import top.focess.keystead.model.SecretType
 
-internal enum class SecretGroupingMode(val label: String) {
-    NONE("None"),
-    TYPE("Type"),
-    CATEGORY("Category"),
-    PROVIDER("Provider"),
+internal enum class SecretGroupingMode {
+    NONE,
+    TYPE,
+    CATEGORY,
+    PROVIDER,
 }
 
 internal data class SecretGroup(val key: String, val label: String, val secrets: List<SecretListItem>)
@@ -20,14 +22,21 @@ internal data class SecretGroup(val key: String, val label: String, val secrets:
  * discoverable.
  */
 internal object SecretGrouper {
-    fun group(secrets: List<SecretListItem>, mode: SecretGroupingMode): List<SecretGroup> {
+    fun group(secrets: List<SecretListItem>, mode: SecretGroupingMode): List<SecretGroup> =
+        group(secrets, mode, EnStrings)
+
+    fun group(
+        secrets: List<SecretListItem>,
+        mode: SecretGroupingMode,
+        strings: Strings,
+    ): List<SecretGroup> {
         if (mode == SecretGroupingMode.NONE || secrets.isEmpty()) {
             return emptyList()
         }
         return secrets
             .groupBy { keyFor(it, mode) }
             .toSortedMap()
-            .map { (key, group) -> SecretGroup(key, labelFor(key, mode), group) }
+            .map { (key, group) -> SecretGroup(key, labelFor(key, mode, strings), group) }
     }
 
     private fun keyFor(secret: SecretListItem, mode: SecretGroupingMode): String =
@@ -38,17 +47,13 @@ internal object SecretGrouper {
             SecretGroupingMode.NONE -> ""
         }
 
-    private fun labelFor(key: String, mode: SecretGroupingMode): String {
+    private fun labelFor(key: String, mode: SecretGroupingMode, strings: Strings): String {
         if (key.isBlank()) {
-            return when (mode) {
-                SecretGroupingMode.CATEGORY -> "No category"
-                SecretGroupingMode.PROVIDER -> "No provider"
-                else -> "Other"
-            }
+            return strings.groupingBucketLabel(mode)
         }
         return when (mode) {
             SecretGroupingMode.TYPE ->
-                runCatching { SecretFormModel.specForOrNull(SecretType.valueOf(key))?.label ?: "Login" }
+                runCatching { strings.secretTypeLabel(SecretType.valueOf(key)) }
                     .getOrDefault(key)
             else -> key
         }

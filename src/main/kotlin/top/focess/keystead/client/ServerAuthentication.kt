@@ -38,13 +38,12 @@ class KeysteadServerAuthClient(
     fun login(
         username: String,
         password: CharArray,
-        deviceId: String? = null,
         tokenSink: ((refreshToken: String, refreshTokenExpiresAt: Instant) -> Unit)? = null,
         onRevoked: (() -> Unit)? = null,
     ): ServerAuthSession {
         val passwordCopy = password.copyOf()
         try {
-            val body = credentialsBody(username, passwordCopy, deviceId)
+            val body = credentialsBody(username, passwordCopy)
             val tokens = sendForTokens("login", body)
             val session = ServerAuthSession(root, http, clock, tokens, tokenSink, onRevoked)
             session.persist(tokens)
@@ -97,7 +96,6 @@ class KeysteadServerAuthClient(
 private fun credentialsBody(
     username: String,
     password: CharArray,
-    deviceId: String? = null,
 ): String =
     buildString {
         append("{\"username\":\"")
@@ -105,11 +103,6 @@ private fun credentialsBody(
         append("\",\"password\":\"")
         append(String(password).json())
         append('"')
-        if (deviceId != null) {
-            append(",\"deviceId\":\"")
-            append(deviceId.json())
-            append('"')
-        }
         append('}')
     }
 

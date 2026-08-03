@@ -1,337 +1,124 @@
 # Keystead Client
 
-Keystead Client is the desktop password and secret manager in the Keystead
-product family. It creates and opens encrypted vaults on your computer, keeps
-encryption and decryption on the client, and optionally connects to a
-self-hosted Keystead Server for encrypted multi-device sync, sharing, key
-rotation, and recovery.
+Keystead Client is the Compose Desktop application for a local-first personal secret vault. It owns local vault files, local encryption and decryption, optional local login, encrypted personal-record synchronization, portable backups, server-assisted reconstruction, and one-off sharing.
 
-The application is built with Kotlin/JVM and Compose Desktop. A local vault
-works without an account or server. When a server is connected, the client
-still owns every operation involving plaintext, vault keys, recovery private
-keys, and device private keys. The server only sees ciphertext and routing
-metadata; this design is often called zero-knowledge because the service
-provider cannot decrypt your data.
+Plaintext secrets and the vault data-encryption key (DEK) remain on devices controlled by the user. Keystead Server stores an account's append-only encrypted record stream and short-lived vault-access exchange messages. It never receives the raw DEK, a vault master password, a local-login credential, or biometric data.
 
-## The Keystead ecosystem
+## Product model
 
-Keystead is delivered as three independent repositories:
+One server account has one personal encrypted record stream. There are no team vaults, roles, members, invitations, or persistent server device identities.
 
-| Project | What it provides |
-| --- | --- |
-| **[Keystead Client](https://github.com/MidCoard/keystead-client)** | This desktop application and its user-facing vault, device, synchronization, collaboration, backup, and recovery workflows |
-| **[Keystead Core](https://github.com/MidCoard/keystead)** | The Java cryptography, typed-secret, local-persistence, encrypted-protocol, native-memory, and process-hardening foundation used by the client |
-| **[Keystead Server](https://github.com/MidCoard/keystead-server)** | The optional self-hosted account and zero-knowledge synchronization service |
+The main areas have separate prerequisites:
 
-Keystead's OS-native security is shared across these layers. Core protects
-owned key material in fail-closed locked native memory by default (locked
-memory means the operating system is asked not to page the buffer to disk;
-if that request cannot be honored, Core refuses to continue rather than
-silently falling back). Client protects persistent device identity material
-with the signed-in user's Windows DPAPI, macOS Keychain, or Linux Secret
-Service facility.
+- **Secrets** opens or creates a local `.kvault` and manages its records.
+- **Local login** is visible only after a local vault is open. It can add or remove one optional local unlock method for that vault.
+- **Account** configures the server URL and owns account creation, sign-in, refresh, and sign-out. It does not require an open vault.
+- **Sync** pushes and pulls the signed-in account's encrypted personal records. It requires both an open vault and a server session.
+- **Recovery** restores a new local `.kvault` from a portable backup or from a same-account approval on another device.
+- **Backup** creates a portable encrypted backup of the open local vault.
+- **Share** creates or redeems a one-off encrypted share through the server.
+- **Settings** controls language and local vault-file deletion.
 
-## What you can do
+A server outage disables only server-backed actions. Local vault unlock, secrets, local login, settings, and portable-backup restore remain local.
 
-- Create or open a password-protected local vault.
-- Store logins, secure notes, API tokens, SSH keys, GPG keys, MFA secrets,
-  certificates, and generic secrets.
-- Generate passwords, API tokens, SSH/GPG key pairs, MFA seeds, and
-  certificates from the application.
-- Search and filter records by type and taxonomy fields.
-- Reveal a protected field temporarily and copy it through an expiring
-  clipboard workflow.
-- Edit or delete records while preserving sync revisions and tombstones
-  (tombstones are encrypted deletion markers that tell other devices a record
-  was removed).
-- Sign in to a Keystead Server with a short-lived bearer session. The server
-  password is used once to obtain access and refresh tokens; afterwards the
-  client sends only the bearer token.
-- Enroll and verify a device using a challenge signed with a local proof key.
-- Push and pull encrypted records, handle revision conflicts, and synchronize
-  deletions.
-- Invite people to a vault, accept or decline invitations, assign owner/admin/
-  editor/viewer roles, and package the vault key separately for every eligible
-  device.
-- Remove members and complete a mandatory, resumable key rotation before new
-  writes continue. Rotation means generating a new vault key and re-encrypting
-  the vault for the remaining members and devices.
-- Share a single secret as a self-contained encrypted string hosted behind a
-  short server code, redeemed with a temporary passphrase. Burn-after-reading
-  and expiry options are supported.
-- Protect the local device identity with Windows DPAPI, macOS Keychain, or
-  Linux Secret Service, or explicitly choose a passphrase-encrypted identity
-  file or a memory-only identity that is discarded when the app exits.
-- Recover a server account and its vault access from an offline recovery kit or
-  approval by an existing verified device.
-- Export and restore encrypted backups with conflict reporting.
+## Local vault and local login
 
-## How your data is protected
+A `.kvault` is an encrypted vault, not a JSON export. Its header contains a random DEK wrapped for its configured local unlock methods. Its records are encrypted and authenticated with that DEK.
 
-Your master password opens a random vault key stored in wrapped form. Secret
-payloads are authenticated and encrypted locally before they are written to
-disk or sent to a server. The server receives ciphertext and synchronization
-state, not the plaintext secret or raw vault key.
+Every local vault has a master-password unlock method. Local login is an optional convenience unlock method for the same vault:
 
-The application also treats the unlocked desktop session as a sensitive state:
+- On Windows, the local private key can be protected by Windows Hello.
+- If biometric-gated storage is unavailable, the local private key can be encrypted with a separate local-login passphrase.
+- Only one local-login credential is maintained. It has no computer name, `deviceId`, server registration, proof key, or server-visible public key.
+- It is never used for server sign-in or server reconstruction.
 
-- vault keys and `SecretBuffer` values (Keystead Core's wipeable secret-memory
-  holder) use Core's fail-closed native locked-memory provider by default; the
-  packaged launcher grants the native access required by Core;
-- closing or locking the vault closes the local vault handle;
-- revealed values expire after a short timeout;
-- selecting, editing, deleting, or locking clears reveal state; a pulled
-  deletion also clears the selection and reveal;
-- copied values are cleared after a timeout only if the clipboard still
-  contains the value Keystead placed there;
-- generated drafts are cleared after successful save, cancel, type change, or
-  lock;
-- server passwords are copied into a temporary array for login and cleared from
-  UI state afterward;
-- device private keys can be stored behind the signed-in operating-system
-  user's native secret facility;
-- native storage never silently falls back: passphrase-file and memory-only
-  modes require an explicit choice;
-- recovery kits, recovery private keys, and replacement-device packages are
-  created or opened locally rather than by the server.
+Local login is not a defense against a fully compromised, already signed-in desktop session. It is a convenient replacement for typing the vault master password when the operating-system biometric check or local-login passphrase can be satisfied.
 
-Compose text fields use immutable JVM strings while visible. Keystead bounds
-their lifetime but cannot guarantee perfect erasure from managed memory. Any
-malware controlling the desktop process while the vault is open can potentially
-capture displayed, decrypted, or copied secrets. Native memory protection
-reduces paging and crash-dump exposure for Core-owned buffers; it cannot make a
-live compromised process trustworthy.
+## Personal-record synchronization
 
-## Typical workflow
+The server stores one encrypted record event stream per account. Events are append-only during normal synchronization. It does not store a vault header and cannot verify which DEK produced an event.
 
-1. Choose a vault file path (or accept the default). A path that does not yet
-   exist creates a new one-file vault.
-2. Enter a master password and open or create the vault.
-3. Select a secret type, complete its fields, and save it.
-4. Select a record to reveal, copy, edit, or delete it. Reveal and clipboard
-   state are temporary.
-5. Optionally create a server account and sign in. The password is not retained
-   as the normal request credential; the client uses a memory-only bearer
-   session.
-6. Choose how to protect the device identity: OS-user-protected storage, a
-   passphrase-encrypted identity file, or a non-persistent memory-only identity.
-   If you later switch to OS-protected storage, an existing passphrase identity
-   can be migrated only after save, reload, signature, and wrapping-key
-   verification.
-7. Create or unlock a local device identity, register its public proof and
-   wrapping keys, complete the server challenge, and publish eligible key
-   packages.
-8. Push local encrypted changes and pull remote pages. If the server has a newer
-   revision, pull first and resolve the conflict locally.
-9. Optionally manage members and recovery from the protection panel. Removing a
-   member blocks writes until the new vault key has been packaged for every
-   remaining target and committed.
-10. Lock the vault when finished. This clears the selected secret, reveal state,
-    form fields, generated values, and relevant in-memory sessions.
+The client therefore validates every downloaded event locally against the open vault's DEK. Authentic events are imported. Events that fail authentication or do not belong to the open vault are ignored and reported to the user. Deletions are synchronized as authenticated tombstone events.
 
-## Supported secret types
+Sync is available only while the local vault is open. After refreshing the record comparison, the user explicitly selects records to upload. Uploading is idempotent and sends only the selected current encrypted records; it does not advance a global cursor past unselected records.
 
-| Type | Examples |
-| --- | --- |
-| Login/password | Website or application credentials |
-| Secure note | Recovery instructions or sensitive text |
-| API token | Service tokens with endpoint/account context |
-| SSH key | Private/public key material and passphrase |
-| GPG key | Private/public key material and identity |
-| MFA secret | Seed and `otpauth` URI |
-| Certificate | X.509 certificate, private key, and passphrase |
-| Generic secret | A single protected value |
+The same selection can remove server copies. After confirmation, the server physically removes all stored events for those selected record IDs while leaving the local vault unchanged. This privacy operation is different from a synchronized tombstone: another client that still has the record can upload it again, and the server retains a redacted purge audit event.
 
-The form model is checked against the canonical schema supplied by Keystead
-Core. Strict secret types reject unknown or incomplete protected fields rather
-than silently discarding them.
+Different devices can synchronize the same account only after they possess the same DEK. Server-assisted reconstruction supplies that DEK without revealing it to the server.
 
-## Synchronization and devices
+## Restore from Keystead Server
 
-The local vault works without a server. Connecting a server adds encrypted
-multi-device synchronization, not server-side decryption.
+Server restore is independent from local login and biometrics.
 
-Each device maintains two independent key roles:
+On each server sign-in, the client creates a new memory-only asymmetric exchange key pair and a random request UUID. It uploads only the UUID and public key. The displayed fingerprint binds both values.
 
-- a proof key signs the enrollment challenge and establishes possession of the
-  device;
-- a wrapping key receives a client-encrypted vault-key package.
+On the new device:
 
-Only verified, non-revoked devices with complete approved wrapping material are
-eligible for packages. Revoking a device stops future device-bound sessions and
-packages, but it cannot remove data that the device already decrypted or saved.
+1. Configure the server URL and sign in to the account.
+2. Open **Recovery → Keystead Server** and keep the access request available.
+3. Compare the request fingerprint with an existing device through an independent channel.
 
-Sync is revision based. Deletes travel as tombstones, and pages advance using a
-stored revision. The client validates response shapes and fails closed on malformed
-lifecycle rows. A revision conflict does not overwrite the newer server row;
-the UI reports that a pull is required.
+On an existing device with the same account and the correct local vault open:
 
-## Sharing and key rotation
+1. Open **Recovery → Approve another device**.
+2. Select the pending request and compare its fingerprint.
+3. Approve it. The client encrypts the open vault's DEK to the request's ephemeral public key and uploads the encrypted package. It also pushes the current encrypted record snapshot.
 
-Sharing is whole-vault and device-specific. An invitation alone carries no key.
-After the recipient accepts, the membership waits in a pending state until an
-owner or administrator encrypts the current vault key separately for an
-eligible recipient device. The server stores that opaque package, and the
-recipient opens it using the device private key held by this client.
+Back on the new device, choose a new `.kvault` location and a new local master password. The client downloads and decrypts the DEK package only in memory, reconstructs the local vault, downloads the encrypted records, validates each record with that DEK, and stores only authentic records. The ephemeral private key is destroyed when the session ends.
 
-Roles govern server operations:
+The server cannot approve a request, decrypt the DEK package, or reconstruct the vault by itself. If no existing device has the correct DEK and no portable backup exists, the encrypted server records cannot be recovered.
 
-| Role | Vault access |
-| --- | --- |
-| Owner | Controls the vault, membership, packages, and rotation |
-| Administrator | Manages members and packages and can read/write encrypted rows |
-| Editor | Reads and writes encrypted rows |
-| Viewer | Reads encrypted rows but cannot publish changes |
+## Portable backup
 
-Package coverage shows which verified devices still need the current key.
-Keystead publishes to every uncovered supported device rather than assuming
-that the signed-in user's device is the only recipient.
+A portable `.ksbackup` is a password-protected complete backup of one vault. Restore first asks for the backup file and a new `.kvault` target. It never silently overwrites an existing target. The backup password decrypts the backup, and a new local master password protects the restored local vault.
 
-Removing an active member immediately removes that member's server access and
-packages, then blocks new writes with `ROTATION_REQUIRED`. The client prepares
-the next key locally, obtains the server's exact device/automation/recovery
-target snapshot, wraps the key for each target, and waits for complete
-coverage. It then commits the locally re-encrypted vault followed by the server
-generation. A public checkpoint file stores only vault, generation, device,
-and key IDs, so the operation can resume after interruption without persisting
-a raw key.
+Portable backups contain sensitive encrypted material. Use an independent strong password and keep the backup separately from the computer.
 
-Rotation protects future versions. It cannot erase information that a former
-member already decrypted, exported, photographed, or copied.
+## Build and run
 
-## Account and vault recovery
+Requirements:
 
-Keystead offers two recovery paths, and both preserve the zero-knowledge
-boundary.
+- JDK 25 to run Gradle. Kotlin bytecode is explicitly targeted to JVM 24 because the current Kotlin compiler does not yet expose a JVM 25 target; this avoids the implicit-fallback warning while remaining runnable on JDK 25.
+- Keystead Core `0.4.4-SNAPSHOT` published to Maven Local.
+- Keystead Server only for connected features.
 
-### Offline recovery kit
-
-When you create a kit, the client generates recovery key material and an
-account-recovery credential. The client sends the credential to the server,
-which stores only a hash of it (never the raw credential), alongside the
-recovery public key, an encrypted recovery private key, and the vault key
-wrapped for that recovery enrollment. The displayed kit is a one-time handoff:
-store it offline, separate from the computer and server.
-
-During recovery, the kit authenticates a short-lived session and decrypts the
-recovery private key locally. The client unwraps each current vault key in a
-temporary store, immediately rewraps it for the replacement device, and asks
-the server to change the account password and enroll that device atomically.
-Temporary key material and directories are removed after the operation.
-
-### Existing verified-device approval
-
-A replacement device creates a canonical request containing its public proof
-and wrapping keys. An existing verified device reviews the fingerprint, wraps
-the current vault keys for the replacement device, and signs the request. The
-replacement device signs the same request to claim a single-use recovery
-session, sets a new server password, and becomes verified. The approving device
-never sends a raw vault key or private key to the server.
-
-Recovery cannot reconstruct information from nothing. If the offline kit,
-every verified device, all usable local headers, and every backup are lost,
-vault access is permanently lost by design.
-
-## Reveal, clipboard, and local storage safety
-
-Reveal is deliberately separate from selecting a record. Pressing **Reveal**
-decrypts the default protected field for that record type (for example, the
-password field of a login) and starts a bounded timer. **Copy** is available
-only while a value is revealed.
-
-Clipboard clearing is conditional: Keystead stores a SHA-256 digest and clears
-the clipboard at expiry only when the current contents still match. If you copy
-something else, Keystead leaves your replacement untouched. The desktop AWT
-clipboard API is best effort; operating systems and clipboard-history tools may
-retain copies outside the application's control.
-
-## OS-level device identity protection
-
-The native mode generates a random 256-bit storage key, protects that key with
-the current operating-system user facility, and uses AES-256-GCM to encrypt the
-client's bounded secure-storage container. Device wrapping and proof private
-keys are stored in that container; the metadata file contains only public keys,
-algorithms, device ID, format version, and capability.
-
-| Platform | Native provider | Scope |
-| --- | --- | --- |
-| Windows | DPAPI with `CRYPTPROTECT_UI_FORBIDDEN` and instance entropy | Current Windows user |
-| macOS | Keychain generic-password APIs through Security.framework | Current login Keychain user |
-| Linux | Secret Service over D-Bus | Current unlocked desktop collection |
-
-The application calls native APIs in-process. It does not pass secrets through
-shell commands or process arguments. Availability is verified by a random
-write/read/delete probe. A locked, denied, missing, or corrupt provider is
-reported with a stable non-secret diagnostic and does not trigger fallback.
-
-OS-user protection is not the same as biometric gating. Keystead does not claim
-Windows Hello, Touch ID, or Linux biometric verification; another process with
-the same user authority may be within the platform provider's trust boundary.
-Passphrase-file mode keeps format-1 and format-2 identities readable, and
-memory-only mode deliberately discards the identity at exit.
-
-## Run the desktop app
-
-Requires JDK 25. The Gradle toolchain selects Java 25, and the application and
-test launchers grant `--enable-native-access=ALL-UNNAMED` so Keystead Core can
-establish its default native secret-memory protection.
-
-```bash
-./gradlew run
-```
-
-On Windows:
+Publish Core locally:
 
 ```powershell
-.\gradlew.bat run
+cd D:\IdeaProjects\keystead
+.\gradlew.bat :keystead-core:publishToMavenLocal --no-daemon
 ```
 
-The default UI is configured for a local server at `http://localhost:8080`, but
-the server is optional for local-only vault use.
+Run the client:
 
-The Compose build is configured to produce MSI and DEB distributions on their
-corresponding desktop platforms; a macOS DMG will ship at the 1.0 standard
-release (jpackage's Dmg packager requires a MAJOR version above 0).
-
-## Verification
-
-```bash
-./gradlew test --no-daemon --rerun-tasks
+```powershell
+cd D:\IdeaProjects\keystead-client
+.\gradlew.bat run --no-daemon
 ```
 
-The client suite covers local sessions, typed forms and generators, bearer
-authentication, device enrollment, sync pagination and tombstones,
-collaboration and staged rotation, both recovery paths, backup flows,
-reveal/clipboard lifecycle, OS-native secure storage, response validation, and
-redaction behavior.
+For two isolated test windows, set `KEYSTEAD_CLIENT_HOME` to a different directory before starting each process. This changes only client settings, local-login metadata, refresh-token storage, and the default vault path for that process.
 
-## Security and platform limits
+Run tests:
 
-Keystead Client currently targets desktop JVM environments. It does not yet
-provide an Android or iOS app, browser extension, browser autofill, desktop
-auto-type, passkey storage, or passkey/WebAuthn login.
+```powershell
+.\gradlew.bat test --no-daemon
+```
 
-OS-native device identity storage is implemented, but it is user-bound rather
-than biometric-gated: Keystead does not claim Windows Hello, Touch ID, or Linux
-biometric verification before every key release. Linux native storage requires
-a working, unlocked Secret Service session. When a native provider is missing,
-locked, denied, or corrupt, Keystead reports the condition and requires the
-user to choose a passphrase-protected file or non-persistent memory mode; it
-does not silently weaken storage.
+Run the opt-in two-client end-to-end test against a real server:
 
-Collaboration is whole-vault. Membership roles and per-device key packages
-control server access; there are no per-record ACLs. For one-off sharing, a
-single secret can be minted as a self-contained encrypted share string and
-hosted behind a short server code (see the Share tab); the server stores only
-the opaque blob, and the temp passphrase is the only key.
-Removing a member and completing the required rotation prevents access to
-future key generations; it cannot erase plaintext, exports, screenshots, or
-ciphertext the member already retained.
+```powershell
+$env:KEYSTEAD_LIVE_TEST_URL='http://localhost:8080'
+.\gradlew.bat test --tests top.focess.keystead.client.LiveTwoClientVaultFlowTest --no-daemon
+```
 
-Recovery is deliberately possession based. If every offline recovery kit,
-eligible verified device, usable local header, and backup is lost, neither the
-client nor server can manufacture the missing vault key.
+That test creates two independent account sessions and two different local vault files. The first session approves the second session's ephemeral request, and the second session must reconstruct the same DEK and decrypt a synchronized record.
 
-Keystead Client is currently intended for technical users evaluating a
-local-first, self-hostable encrypted vault and for self-hosters testing the
-complete account, device, collaboration, rotation, and recovery lifecycle.
+The protobuf runtime is a transitive dependency of Google Tink's key serialization; Keystead does not use protobuf as its client/server protocol. The `sun.misc.Unsafe` warning on newer JDKs comes from that dependency. Removing protobuf without replacing Tink would remove part of the cryptographic implementation, so the supported mitigation is to use the supported JDK and keep Tink/protobuf updated.
+
+## Security limits
+
+- Compose text fields use managed JVM strings while values are visible, so perfect erasure cannot be guaranteed.
+- Clipboard clearing is best effort and cannot control operating-system clipboard history.
+- Biometric protection cannot make a compromised live desktop process trustworthy.
+- Server availability cannot replace possession of the correct DEK.
+- Deleting the last usable local vault and portable backup can permanently lose access to the encrypted server records.

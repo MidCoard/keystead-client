@@ -6,7 +6,7 @@ import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.Properties
 
-enum class SecureStorageMode { NATIVE, PASSPHRASE_FILE, MEMORY_ONLY }
+enum class SecureStorageMode { BIOMETRIC, PASSPHRASE_FILE, MEMORY_ONLY }
 data class PersistedSecureStorageSelection(val mode: SecureStorageMode, val providerId: String?)
 
 class SecureStorageSettings(private val file: Path) {

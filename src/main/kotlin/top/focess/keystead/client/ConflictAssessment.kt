@@ -1,5 +1,8 @@
 package top.focess.keystead.client
 
+import top.focess.keystead.client.i18n.EnStrings
+import top.focess.keystead.client.i18n.Strings
+
 /**
  * Structured assessment of a server revision conflict, produced from a
  * [KeysteadRevisionConflictException].
@@ -16,21 +19,20 @@ internal data class ConflictAssessment(
     val warning: String?,
 ) {
     companion object {
-        fun from(error: KeysteadRevisionConflictException): ConflictAssessment {
-            val base = SyncStatusFormatter.messageFor(error)
+        fun from(error: KeysteadRevisionConflictException): ConflictAssessment = from(error, EnStrings)
+
+        fun from(error: KeysteadRevisionConflictException, strings: Strings): ConflictAssessment {
+            val base = SyncStatusFormatter.messageFor(error, strings)
             return if (error.serverDeleted == true) {
                 ConflictAssessment(
-                    title = "Conflict: deleted on server",
+                    title = strings.conflictDeletedTitle,
                     message = base,
                     canAutoRecover = false,
-                    warning =
-                        "This secret was deleted on the server. Pulling discards your local " +
-                            "change. Pull to accept the deletion, or cancel and re-save to keep " +
-                            "your local copy.",
+                    warning = strings.conflictDeletedWarning,
                 )
             } else {
                 ConflictAssessment(
-                    title = "Conflict: newer data on server",
+                    title = strings.conflictNewerTitle,
                     message = base,
                     canAutoRecover = true,
                     warning = null,

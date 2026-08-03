@@ -1,170 +1,116 @@
 package top.focess.keystead.client
 
-import com.sun.net.httpserver.HttpServer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.net.InetSocketAddress
-import java.util.Base64
+import java.nio.file.FileAlreadyExistsException
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 class VaultBackupTest {
     @Test
-    fun exportAndRestoreRoundTripsSecretIntoProvisionedVault() {
-        val directory = createTempDirectory("keystead-backup")
+    fun passwordProtectedBackupRestoresNewVaultWithoutSourceDeviceOrServer() {
+        val directory = createTempDirectory("keystead-full-backup")
         val sourceFile = directory.resolve("source.kvault")
-        lateinit var fingerprint: String
-        val archive = ByteArrayOutputStream().use { out ->
-            LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-                fingerprint = session.fingerprintValue()
-                session.addLogin("GitHub", "alice@example.com", "secret-password", "https://github.com")
-                VaultBackup.export(session, out)
+        val restoredFile = directory.resolve("restored.kvault")
+        val archive =
+            ByteArrayOutputStream().use { output ->
+                LocalVaultSession.openOrCreate(
+                    sourceFile,
+                    "original-local-passphrase".toCharArray(),
+                ).use { source ->
+                    source.addLogin(
+                        "GitHub",
+                        "alice@example.com",
+                        "secret-password",
+                        "https://github.com",
+                    )
+                    VaultBackup.export(
+                        source,
+                        "portable-backup-password".toCharArray(),
+                        output,
+                    )
+                }
+                output.toByteArray()
             }
-            out.toByteArray()
-        }
-        // The archive is encrypted: neither the title nor the URL may appear in plaintext.
-        val archiveText = String(archive)
+        Files.delete(sourceFile)
+
+        val archiveText = String(archive, StandardCharsets.ISO_8859_1)
         assertFalse(archiveText.contains("GitHub"))
-        assertFalse(archiveText.contains("github.com"))
+        assertFalse(archiveText.contains("secret-password"))
 
-        // A backup is bound to its vault's data-encryption key, so restoring into an empty vault is only
-        // valid into a device-provisioned target that shares that key. Provision one, then restore.
-        DeviceIdentityStore(directory.resolve("device"))
-            .createOrLoad("laptop-1", "identity-password".toCharArray())
-            .use { identity ->
-                val publicKey = identity.publicKey()
-                val proofPublicKey = identity.proofPublicKey()
-                var publishedPackage: String? = null
-                try {
-                    withServer(
-                        responseFor = { request ->
-                            when (request.path) {
-                                "/api/v1/devices" ->
-                                    TestResponse(
-                                        200,
-                                        """[{"deviceId":"${identity.deviceId}","keyAlgorithm":"${identity.proofKeyAlgorithm}","publicKey":"${Base64.getEncoder().encodeToString(proofPublicKey)}","wrappingKeyAlgorithm":"${identity.keyAlgorithm}","wrappingPublicKey":"${Base64.getEncoder().encodeToString(publicKey)}","createdAt":"2026-07-12T00:00:00Z","verifiedAt":"2026-07-12T00:00:01Z"}]""",
-                                    )
-                                "/api/v1/vaults/$fingerprint/key-packages/${identity.deviceId}" -> {
-                                    publishedPackage = request.body
-                                    TestResponse(204)
-                                }
-                                "/api/v1/vaults/$fingerprint/key-packages" ->
-                                    TestResponse(
-                                        200,
-                                        "[{\"fingerprint\":\"$fingerprint\",\"deviceId\":\"${identity.deviceId}\",${publishedPackage!!.drop(1).dropLast(1)}}]",
-                                    )
-                                else -> error("Unexpected request: ${request.method} ${request.path}")
-                            }
-                        },
-                    ) { baseUrl, _ ->
-                        val client = KeysteadServerClient(baseUrl, "alice", "secret")
-                        LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-                            session.publishVaultKeyPackagesForRegisteredDevices(client)
-                        }
-                        val targetFile = directory.resolve("target.kvault")
-                        LocalVaultSession.openProvisionedFromServer(targetFile, fingerprint, identity, client).use { target ->
-                            val report = ByteArrayInputStream(archive).use { input ->
-                                VaultBackup.restore(target, input)
-                            }
-                            assertEquals(1, report.imported)
-                            assertEquals(0, report.skipped)
-                            assertTrue(report.conflicts.isEmpty())
-                            assertTrue(target.listLogins().map { it.title }.contains("GitHub"))
-                        }
-                    }
-                } finally {
-                    publicKey.fill(0)
-                    proofPublicKey.fill(0)
-                }
+        ByteArrayInputStream(archive).use { input ->
+            VaultBackup.restore(
+                restoredFile,
+                input,
+                "portable-backup-password".toCharArray(),
+                "new-local-master-passphrase".toCharArray(),
+            ).use { restored ->
+                val login = restored.listLogins().single()
+                assertEquals("GitHub", login.title)
+                assertEquals("secret-password", restored.revealPassword(login.id))
             }
+        }
+
+        LocalVaultSession.openOrCreate(
+            restoredFile,
+            "new-local-master-passphrase".toCharArray(),
+        ).use { reopened ->
+            assertEquals(listOf("GitHub"), reopened.listLogins().map { it.title })
+        }
+        assertFails {
+            LocalVaultSession.openOrCreate(
+                restoredFile,
+                "original-local-passphrase".toCharArray(),
+            )
+        }
     }
 
     @Test
-    fun restoreIntoSameVaultSkipsRowsAlreadyAtLeastAsNew() {
-        val directory = createTempDirectory("keystead-backup-conflict")
+    fun restoringBackupNeverOverwritesAnExistingVault() {
+        val directory = createTempDirectory("keystead-backup-no-overwrite")
         val sourceFile = directory.resolve("source.kvault")
-        LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-            session.addLogin("GitHub", "alice@example.com", "secret-password", "https://github.com")
-        }
-
-        val archive = ByteArrayOutputStream().use { out ->
-            LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-                VaultBackup.export(session, out)
-            }
-            out.toByteArray()
-        }
-
-        val report = ByteArrayInputStream(archive).use { input ->
-            LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-                VaultBackup.restore(session, input)
-            }
-        }
-        assertEquals(0, report.imported)
-        assertEquals(1, report.skipped)
-        // Same-revision, same-deletion-state rows are a pure skip: a conflict is only reported when
-        // the deletion state differs (one side tombstoned, the other active).
-        assertTrue(report.conflicts.isEmpty())
-    }
-
-    @Test
-    fun restoreRejectsArchiveForADifferentVault() {
-        val directory = createTempDirectory("keystead-backup-reject")
-        val sourceFile = directory.resolve("source.kvault")
-        LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-            session.addLogin("GitHub", "alice@example.com", "secret-password", "https://github.com")
-        }
-
-        val otherFile = directory.resolve("other.kvault")
-        val otherArchive = ByteArrayOutputStream().use { out ->
-            LocalVaultSession.openOrCreate(otherFile, "other-password".toCharArray()).use { session ->
-                session.addLogin("Other", "bob", "other-password", null)
-                VaultBackup.export(session, out)
-            }
-            out.toByteArray()
-        }
-
-        assertFailsWith<IllegalArgumentException> {
-            ByteArrayInputStream(otherArchive).use { input ->
-                LocalVaultSession.openOrCreate(sourceFile, "master-password".toCharArray()).use { session ->
-                    VaultBackup.restore(session, input)
+        val existingTarget = directory.resolve("existing.kvault")
+        val archive =
+            ByteArrayOutputStream().use { output ->
+                LocalVaultSession.openOrCreate(
+                    sourceFile,
+                    "source-master-passphrase".toCharArray(),
+                ).use { source ->
+                    source.addLogin("Source", "source-user", "source-password", "")
+                    VaultBackup.export(source, "backup-password".toCharArray(), output)
                 }
+                output.toByteArray()
             }
+        LocalVaultSession.openOrCreate(
+            existingTarget,
+            "existing-master-passphrase".toCharArray(),
+        ).use { existing ->
+            existing.addLogin("Keep me", "existing-user", "existing-password", "")
         }
-    }
 
-    private fun withServer(
-        responseFor: (CapturedRequest) -> TestResponse,
-        block: (String, MutableList<CapturedRequest>) -> Unit,
-    ) {
-        val requests = mutableListOf<CapturedRequest>()
-        val server = HttpServer.create(InetSocketAddress(0), 0)
-        server.createContext("/") { exchange ->
-            val request =
-                CapturedRequest(
-                    method = exchange.requestMethod,
-                    path = exchange.requestURI.toString(),
-                    body = exchange.requestBody.readBytes().decodeToString(),
+        assertFailsWith<FileAlreadyExistsException> {
+            ByteArrayInputStream(archive).use { input ->
+                VaultBackup.restore(
+                    existingTarget,
+                    input,
+                    "backup-password".toCharArray(),
+                    "new-master-passphrase".toCharArray(),
                 )
-            requests.add(request)
-            val testResponse = responseFor(request)
-            val response = testResponse.body.encodeToByteArray()
-            exchange.sendResponseHeaders(testResponse.statusCode, response.size.toLong())
-            exchange.responseBody.use { it.write(response) }
-            exchange.close()
+            }
         }
-        server.start()
-        try {
-            block("http://127.0.0.1:${server.address.port}", requests)
-        } finally {
-            server.stop(0)
+
+        LocalVaultSession.openOrCreate(
+            existingTarget,
+            "existing-master-passphrase".toCharArray(),
+        ).use { existing ->
+            assertEquals(listOf("Keep me"), existing.listLogins().map { it.title })
+            assertEquals("existing-password", existing.revealPassword(existing.listLogins().single().id))
         }
     }
-
-    private data class CapturedRequest(val method: String, val path: String, val body: String)
-
-    private data class TestResponse(val statusCode: Int, val body: String = "")
 }

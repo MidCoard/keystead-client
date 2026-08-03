@@ -9,100 +9,124 @@ import kotlin.test.assertSame
 
 class SecureStorageViewModelTest {
     @Test
-    fun `native success becomes available and can be selected`() {
+    fun successfulCheckDoesNotImplicitlySelectBiometricStorage() {
         val directory = Files.createTempDirectory("keystead-storage-vm")
         val settings = SecureStorageSettings(directory.resolve("selection.properties"))
         val storage = MemorySecureStorage()
-        val viewModel = SecureStorageViewModel(
-            settings,
-            nativeSelector = { _, _ -> SecureStorageSelection.Available(storage, "test-native") },
-        )
+        val viewModel =
+            SecureStorageViewModel(
+                settings,
+                biometricSelector = { _, _ ->
+                    SecureStorageSelection.Available(storage, "windows-hello")
+                },
+            )
 
-        val checked = viewModel.checkNative(directory, "desktop")
-        assertEquals(SecureStorageUiState.NATIVE_AVAILABLE, checked.state)
-        assertEquals("test-native", checked.providerId)
-        assertSame(storage, viewModel.selectNative())
+        val model = viewModel.initialize(directory, "desktop")
+
+        assertEquals(null, model.selectedMode)
+        assertEquals(BiometricAvailability.AVAILABLE, model.biometricAvailability)
+        assertEquals("windows-hello", model.providerId)
+        assertFalse(model.biometricActive)
+        assertEquals(null, viewModel.selectedStorage())
+        assertEquals(null, settings.load())
+    }
+
+    @Test
+    fun existingPassphraseLocalLoginRestoresMissingSelection() {
+        val directory = Files.createTempDirectory("keystead-storage-adopt-passphrase")
+        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        val viewModel = unavailableViewModel(settings)
+        viewModel.initialize(directory, "desktop")
+
+        val model = viewModel.adoptExistingLocalLogin(LocalLoginPersistence.PASSPHRASE_FILE)
+
+        assertEquals(SecureStorageMode.PASSPHRASE_FILE, model.selectedMode)
         assertEquals(
-            PersistedSecureStorageSelection(SecureStorageMode.NATIVE, "test-native"),
+            PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null),
             settings.load(),
         )
     }
 
     @Test
-    fun `locked native provider is reported without implicit fallback`() {
-        val directory = Files.createTempDirectory("keystead-storage-vm")
-        val viewModel = SecureStorageViewModel(
-            SecureStorageSettings(directory.resolve("selection.properties")),
-            nativeSelector = { _, _ ->
-                SecureStorageSelection.Unavailable(
-                    SecureStorageDiagnostic("secret-service", OsSecretStoreFailure.LOCKED, "collection-locked"),
-                )
-            },
-        )
+    fun persistedBiometricSelectionActivatesAvailableStorage() {
+        val directory = Files.createTempDirectory("keystead-storage-biometric")
+        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        settings.save(PersistedSecureStorageSelection(SecureStorageMode.BIOMETRIC, "windows-hello"))
+        val storage = MemorySecureStorage()
+        val viewModel =
+            SecureStorageViewModel(settings) { _, _ ->
+                SecureStorageSelection.Available(storage, "windows-hello")
+            }
 
-        val result = viewModel.checkNative(directory, "desktop")
-        assertEquals(SecureStorageUiState.NATIVE_UNAVAILABLE, result.state)
-        assertEquals("collection-locked", result.diagnosticCode)
+        val model = viewModel.initialize(directory, "desktop")
+
+        assertEquals(SecureStorageMode.BIOMETRIC, model.selectedMode)
+        assertEquals(BiometricAvailability.AVAILABLE, model.biometricAvailability)
+        assertSame(storage, viewModel.selectedStorage())
+        assertEquals(true, model.biometricActive)
+    }
+
+    @Test
+    fun recheckDoesNotCloseAlreadyActiveStorage() {
+        val directory = Files.createTempDirectory("keystead-storage-recheck")
+        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        settings.save(PersistedSecureStorageSelection(SecureStorageMode.BIOMETRIC, "windows-hello"))
+        val storage = CloseTrackingStorage()
+        var checks = 0
+        val viewModel =
+            SecureStorageViewModel(settings) { _, _ ->
+                if (checks++ == 0) {
+                    SecureStorageSelection.Available(storage, "windows-hello")
+                } else {
+                    SecureStorageSelection.Unavailable(
+                        SecureStorageDiagnostic(
+                            "windows-hello",
+                            OsSecretStoreFailure.LOCKED,
+                            "windows-hello-cancelled",
+                        ),
+                    )
+                }
+            }
+        viewModel.initialize(directory, "desktop")
+
+        val rechecked = viewModel.checkBiometric(directory, "desktop")
+
+        assertSame(storage, viewModel.selectedStorage())
+        assertFalse(storage.closed)
+        assertEquals(BiometricAvailability.UNAVAILABLE, rechecked.biometricAvailability)
+        assertEquals(true, rechecked.biometricActive)
+    }
+
+    @Test
+    fun explicitFallbackSelectionsRemainAvailable() {
+        val directory = Files.createTempDirectory("keystead-storage-fallback")
+        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        val viewModel = unavailableViewModel(settings)
+        viewModel.initialize(directory, "desktop")
+
+        assertEquals(SecureStorageMode.MEMORY_ONLY, viewModel.selectMemory().selectedMode)
+        assertIs<MemorySecureStorage>(viewModel.selectedStorage())
+        assertEquals(SecureStorageMode.PASSPHRASE_FILE, viewModel.selectPassphrase().selectedMode)
         assertEquals(null, viewModel.selectedStorage())
     }
 
-    @Test
-    fun `passphrase and memory fallback require explicit selection`() {
-        val directory = Files.createTempDirectory("keystead-storage-vm")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
-        val viewModel = SecureStorageViewModel(settings) { _, _ ->
+    private fun unavailableViewModel(settings: SecureStorageSettings) =
+        SecureStorageViewModel(settings) { _, _ ->
             SecureStorageSelection.Unavailable(
-                SecureStorageDiagnostic("none", OsSecretStoreFailure.UNSUPPORTED, "unsupported"),
+                SecureStorageDiagnostic(
+                    "none",
+                    OsSecretStoreFailure.UNSUPPORTED,
+                    "biometric-provider-unsupported",
+                ),
             )
         }
 
-        viewModel.checkNative(directory, "desktop")
-        assertEquals(SecureStorageUiState.PASSPHRASE_SELECTED, viewModel.selectPassphrase().state)
-        assertEquals(PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null), settings.load())
-        assertEquals(SecureStorageUiState.MEMORY_SELECTED, viewModel.selectMemory().state)
-        assertIs<MemorySecureStorage>(viewModel.selectedStorage())
-        assertEquals(PersistedSecureStorageSelection(SecureStorageMode.MEMORY_ONLY, null), settings.load())
-    }
-
-    @Test
-    fun `migration selects native only after verified migration succeeds`() {
-        val directory = Files.createTempDirectory("keystead-storage-vm")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
-        settings.save(PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null))
-        val storage = MemorySecureStorage()
-        val viewModel = SecureStorageViewModel(settings) { _, _ ->
-            SecureStorageSelection.Available(storage, "test-native")
-        }
-        viewModel.checkNative(directory, "desktop")
-
-        val result = viewModel.migrateIdentity { candidate ->
-            assertSame(storage, candidate)
-            DeviceIdentityMigrationResult.Migrated
-        }
-
-        assertEquals(DeviceIdentityMigrationResult.Migrated, result)
-        assertEquals(PersistedSecureStorageSelection(SecureStorageMode.NATIVE, "test-native"), settings.load())
-    }
-
-    @Test
-    fun `failed migration retains old selection and diagnostics redact secrets`() {
-        val directory = Files.createTempDirectory("keystead-storage-vm")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
-        settings.save(PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null))
-        val viewModel = SecureStorageViewModel(settings) { _, _ ->
-            SecureStorageSelection.Available(MemorySecureStorage(), "test-native")
-        }
-        viewModel.checkNative(directory, "desktop")
-
-        runCatching { viewModel.migrateIdentity { error("migration-failed") } }
-
-        assertEquals(PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null), settings.load())
-        val diagnostic = SecureStorageUiModel(
-            SecureStorageUiState.NATIVE_UNAVAILABLE,
-            "test-native",
-            "native-probe-failed",
-        ).toString()
-        assertFalse(diagnostic.contains("private", ignoreCase = true))
-        assertFalse(diagnostic.contains("secret-value"))
+    private class CloseTrackingStorage : SecureStorage, AutoCloseable {
+        override val capability = SecureStorageCapability.OS_BIOMETRIC_GATED
+        var closed = false
+        override fun save(key: SecureStorageKey, value: ByteArray) = Unit
+        override fun load(key: SecureStorageKey): ByteArray? = null
+        override fun delete(key: SecureStorageKey) = Unit
+        override fun close() { closed = true }
     }
 }

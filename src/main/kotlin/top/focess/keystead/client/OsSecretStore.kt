@@ -9,7 +9,7 @@ class OsSecretStoreException(
     val failure: OsSecretStoreFailure,
     val diagnosticCode: String,
     cause: Throwable? = null,
-) : IllegalStateException("OS secure storage failed: $diagnosticCode", cause) {
+) : IllegalStateException("Secure storage failed: $diagnosticCode", cause) {
     override fun toString(): String = "OsSecretStoreException(failure=$failure, diagnosticCode=$diagnosticCode)"
 }
 

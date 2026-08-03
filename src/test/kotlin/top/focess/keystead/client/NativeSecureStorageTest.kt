@@ -23,7 +23,7 @@ class NativeSecureStorageTest {
             assertContentEquals(byteArrayOf(1, 2, 3), loaded)
             loaded[0] = 8
             assertContentEquals(byteArrayOf(1, 2, 3), storage.load(testKey))
-            assertEquals(SecureStorageCapability.OS_USER_PROTECTED, storage.capability)
+            assertEquals(SecureStorageCapability.OS_BIOMETRIC_GATED, storage.capability)
         }
         assertFalse(Files.readAllBytes(file).toString(Charsets.ISO_8859_1).contains("refresh-token"))
     }
@@ -52,6 +52,48 @@ class NativeSecureStorageTest {
         NativeSecureStorage(file, "desktop", os).use { storage -> storage.save(testKey, byteArrayOf(4)); storage.destroy() }
         assertFalse(Files.exists(file))
         assertEquals(null, os.load("desktop"))
+    }
+
+    @Test
+    fun failedOverwriteRestoresPreviousInMemoryValue() {
+        val os = FakeOsSecretStore()
+        val file = createTempDirectory().resolve("native.ks2")
+        val writer = FailAfterOneWrite()
+        NativeSecureStorage(file, "desktop", os, java.security.SecureRandom(), writer).use {
+            storage ->
+            storage.save(testKey, byteArrayOf(1, 2, 3))
+
+            assertFailsWith<OsSecretStoreException> {
+                storage.save(testKey, byteArrayOf(9, 9, 9))
+            }
+
+            assertContentEquals(byteArrayOf(1, 2, 3), storage.load(testKey))
+        }
+    }
+
+    @Test
+    fun failedDeleteRestoresRemovedInMemoryValue() {
+        val os = FakeOsSecretStore()
+        val file = createTempDirectory().resolve("native.ks2")
+        val writer = FailAfterOneWrite()
+        NativeSecureStorage(file, "desktop", os, java.security.SecureRandom(), writer).use {
+            storage ->
+            storage.save(testKey, byteArrayOf(4, 5, 6))
+
+            assertFailsWith<OsSecretStoreException> { storage.delete(testKey) }
+
+            assertContentEquals(byteArrayOf(4, 5, 6), storage.load(testKey))
+        }
+    }
+
+    private class FailAfterOneWrite : SecureStorageFileWriter {
+        private var writes = 0
+
+        override fun write(file: java.nio.file.Path, encoded: ByteArray) {
+            if (writes++ > 0) throw java.io.IOException("simulated-write-failure")
+            Files.createDirectories(file.toAbsolutePath().parent)
+            Files.write(file, encoded)
+        }
     }
 }
 

@@ -4,112 +4,200 @@ import java.nio.file.Path
 
 enum class SecureStorageUiState {
     CHECKING,
-    NATIVE_AVAILABLE,
-    NATIVE_UNAVAILABLE,
+    BIOMETRIC_AVAILABLE,
+    BIOMETRIC_UNAVAILABLE,
     PASSPHRASE_SELECTED,
     MEMORY_SELECTED,
 }
 
+enum class BiometricAvailability {
+    NOT_CHECKED,
+    CHECKING,
+    AVAILABLE,
+    UNAVAILABLE,
+}
+
 data class SecureStorageUiModel(
-    val state: SecureStorageUiState,
+    val selectedMode: SecureStorageMode?,
+    val biometricAvailability: BiometricAvailability,
     val providerId: String? = null,
     val diagnosticCode: String? = null,
-)
+    val biometricActive: Boolean = false,
+) {
+    val state: SecureStorageUiState
+        get() =
+            when {
+                selectedMode == SecureStorageMode.PASSPHRASE_FILE ->
+                    SecureStorageUiState.PASSPHRASE_SELECTED
+                selectedMode == SecureStorageMode.MEMORY_ONLY ->
+                    SecureStorageUiState.MEMORY_SELECTED
+                biometricAvailability == BiometricAvailability.UNAVAILABLE ->
+                    SecureStorageUiState.BIOMETRIC_UNAVAILABLE
+                biometricAvailability == BiometricAvailability.AVAILABLE ->
+                    SecureStorageUiState.BIOMETRIC_AVAILABLE
+                else -> SecureStorageUiState.CHECKING
+            }
+}
 
 class SecureStorageViewModel internal constructor(
     private val settings: SecureStorageSettings,
-    private val nativeSelector: (Path, String) -> SecureStorageSelection,
+    private val biometricSelector: (Path, String) -> SecureStorageSelection,
 ) : AutoCloseable {
     constructor(
         settings: SecureStorageSettings,
         factory: SecureStorageFactory = SecureStorageFactory(),
-    ) : this(settings, factory::native)
+    ) : this(settings, factory::biometric)
 
-    private var nativeCandidate: SecureStorageSelection.Available? = null
+    private var biometricCandidate: SecureStorageSelection.Available? = null
     private var selected: SecureStorage? = null
 
     var model: SecureStorageUiModel = initialModel(settings.load())
         private set
 
-    fun checkNative(dataDirectory: Path, instanceId: String): SecureStorageUiModel {
-        closeNativeCandidate()
-        model = SecureStorageUiModel(SecureStorageUiState.CHECKING)
-        return when (val result = nativeSelector(dataDirectory, instanceId)) {
+    fun initialize(dataDirectory: Path, instanceId: String): SecureStorageUiModel {
+        if (model.selectedMode == SecureStorageMode.MEMORY_ONLY && selected !is MemorySecureStorage) {
+            selected = MemorySecureStorage()
+        }
+        return checkBiometric(dataDirectory, instanceId)
+    }
+
+    fun checkBiometric(dataDirectory: Path, instanceId: String): SecureStorageUiModel {
+        val existingCandidate = biometricCandidate
+        val existingStorage = existingCandidate?.storage
+        val existingActive =
+            model.selectedMode == SecureStorageMode.BIOMETRIC &&
+                selected === existingStorage &&
+                existingStorage != null
+        model =
+            model.copy(
+                biometricAvailability = BiometricAvailability.CHECKING,
+                providerId = existingCandidate?.providerId ?: model.providerId,
+                diagnosticCode = null,
+                biometricActive = existingActive,
+            )
+        return when (val result = biometricSelector(dataDirectory, instanceId)) {
             is SecureStorageSelection.Available -> {
-                nativeCandidate = result
-                model = SecureStorageUiModel(
-                    SecureStorageUiState.NATIVE_AVAILABLE,
-                    result.providerId,
-                )
+                if (existingActive) {
+                    if (result.storage !== existingStorage) {
+                        (result.storage as? AutoCloseable)?.close()
+                    }
+                    biometricCandidate = existingCandidate
+                    selected = existingStorage
+                } else {
+                    if (selected === existingStorage) selected = null
+                    (existingStorage as? AutoCloseable)?.close()
+                    biometricCandidate = result
+                    if (model.selectedMode == SecureStorageMode.BIOMETRIC) {
+                        selected = result.storage
+                    }
+                }
+                model =
+                    model.copy(
+                        biometricAvailability = BiometricAvailability.AVAILABLE,
+                        providerId = result.providerId,
+                        diagnosticCode = null,
+                        biometricActive =
+                            existingActive ||
+                                (model.selectedMode == SecureStorageMode.BIOMETRIC &&
+                                    selected === result.storage),
+                    )
                 model
             }
             is SecureStorageSelection.Unavailable -> {
-                model = SecureStorageUiModel(
-                    SecureStorageUiState.NATIVE_UNAVAILABLE,
-                    result.diagnostic.providerId,
-                    result.diagnostic.diagnosticCode,
-                )
+                if (!existingActive) {
+                    if (selected === existingStorage) selected = null
+                    (existingStorage as? AutoCloseable)?.close()
+                    biometricCandidate = null
+                }
+                model =
+                    model.copy(
+                        biometricAvailability = BiometricAvailability.UNAVAILABLE,
+                        providerId = result.diagnostic.providerId,
+                        diagnosticCode = result.diagnostic.diagnosticCode,
+                        biometricActive = existingActive,
+                    )
                 model
             }
         }
     }
 
-    fun selectNative(): SecureStorage {
-        val available = checkNotNull(nativeCandidate) { "Native secure storage is not available" }
+    fun selectBiometric(): SecureStorage {
+        val available =
+            checkNotNull(biometricCandidate) { "Biometric secure storage is not available" }
+        clearSelectedMemory()
         selected = available.storage
-        settings.save(PersistedSecureStorageSelection(SecureStorageMode.NATIVE, available.providerId))
-        model = SecureStorageUiModel(SecureStorageUiState.NATIVE_AVAILABLE, available.providerId)
+        settings.save(
+            PersistedSecureStorageSelection(SecureStorageMode.BIOMETRIC, available.providerId),
+        )
+        model =
+            model.copy(
+                selectedMode = SecureStorageMode.BIOMETRIC,
+                biometricAvailability = BiometricAvailability.AVAILABLE,
+                providerId = available.providerId,
+                diagnosticCode = null,
+                biometricActive = true,
+            )
         return available.storage
     }
 
     fun selectPassphrase(): SecureStorageUiModel {
+        clearSelectedMemory()
+        if (selected !== biometricCandidate?.storage) selected = null
         selected = null
         settings.save(PersistedSecureStorageSelection(SecureStorageMode.PASSPHRASE_FILE, null))
-        model = SecureStorageUiModel(SecureStorageUiState.PASSPHRASE_SELECTED)
+        model = model.copy(selectedMode = SecureStorageMode.PASSPHRASE_FILE, biometricActive = false)
         return model
     }
 
     fun selectMemory(): SecureStorageUiModel {
-        selected = MemorySecureStorage()
+        val memory = selected as? MemorySecureStorage ?: MemorySecureStorage()
+        selected = memory
         settings.save(PersistedSecureStorageSelection(SecureStorageMode.MEMORY_ONLY, null))
-        model = SecureStorageUiModel(SecureStorageUiState.MEMORY_SELECTED)
+        model = model.copy(selectedMode = SecureStorageMode.MEMORY_ONLY, biometricActive = false)
         return model
+    }
+
+    fun adoptExistingLocalLogin(persistence: LocalLoginPersistence): SecureStorageUiModel {
+        if (model.selectedMode != null) return model
+        return when (persistence) {
+            LocalLoginPersistence.PASSPHRASE_FILE -> selectPassphrase()
+            LocalLoginPersistence.BIOMETRIC -> {
+                if (model.biometricAvailability == BiometricAvailability.AVAILABLE) {
+                    selectBiometric()
+                    model
+                } else {
+                    settings.save(
+                        PersistedSecureStorageSelection(SecureStorageMode.BIOMETRIC, model.providerId),
+                    )
+                    model = model.copy(selectedMode = SecureStorageMode.BIOMETRIC, biometricActive = false)
+                    model
+                }
+            }
+        }
     }
 
     fun selectedStorage(): SecureStorage? = selected
 
-    fun migrateIdentity(migration: (SecureStorage) -> DeviceIdentityMigrationResult): DeviceIdentityMigrationResult {
-        val available = checkNotNull(nativeCandidate) { "Native secure storage is not available" }
-        val result = migration(available.storage)
-        selected = available.storage
-        settings.save(PersistedSecureStorageSelection(SecureStorageMode.NATIVE, available.providerId))
-        model = SecureStorageUiModel(SecureStorageUiState.NATIVE_AVAILABLE, available.providerId)
-        return result
-    }
-
     override fun close() {
-        val storage = nativeCandidate?.storage
-        nativeCandidate = null
+        val biometric = biometricCandidate?.storage
+        val active = selected
+        biometricCandidate = null
         selected = null
-        (storage as? AutoCloseable)?.close()
+        if (active is MemorySecureStorage) active.clear()
+        (biometric as? AutoCloseable)?.close()
     }
 
-    private fun closeNativeCandidate() {
-        val existing = nativeCandidate?.storage
-        nativeCandidate = null
-        if (selected === existing) selected = null
-        (existing as? AutoCloseable)?.close()
+    private fun clearSelectedMemory() {
+        (selected as? MemorySecureStorage)?.clear()
     }
 
     private companion object {
         fun initialModel(selection: PersistedSecureStorageSelection?): SecureStorageUiModel =
-            when (selection?.mode) {
-                SecureStorageMode.PASSPHRASE_FILE ->
-                    SecureStorageUiModel(SecureStorageUiState.PASSPHRASE_SELECTED)
-                SecureStorageMode.MEMORY_ONLY ->
-                    SecureStorageUiModel(SecureStorageUiState.MEMORY_SELECTED)
-                SecureStorageMode.NATIVE, null ->
-                    SecureStorageUiModel(SecureStorageUiState.CHECKING, selection?.providerId)
-            }
+            SecureStorageUiModel(
+                selectedMode = selection?.mode,
+                biometricAvailability = BiometricAvailability.NOT_CHECKED,
+                providerId = selection?.providerId,
+                biometricActive = false,
+            )
     }
 }

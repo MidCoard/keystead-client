@@ -3,27 +3,45 @@ package top.focess.keystead.client
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import top.focess.keystead.client.i18n.Strings
 
 /**
  * A pending destructive action awaiting user confirmation.
  *
  * Each variant carries the dialog copy so the confirmation UI and the message formatting stay in
  * one testable place; the payload (e.g. the secret id) is what the confirmed action executes on.
+ * The copy is produced on demand from the active [Strings] so the dialog follows the interface
+ * locale rather than capturing English at request time.
  */
 internal sealed interface DestructiveConfirmation {
-    val title: String
-    val message: String
+    fun title(strings: Strings): String
+    fun message(strings: Strings): String
 
     data class DeleteSecret(val secretId: String, val secretTitle: String) : DestructiveConfirmation {
-        override val title: String = "Delete secret"
-        override val message: String = "Delete \"$secretTitle\"? This cannot be undone."
+        override fun title(strings: Strings): String = strings.deleteSecretTitle
+        override fun message(strings: Strings): String = strings.deleteSecretMessage(secretTitle)
     }
 
-    data object RevokeDevice : DestructiveConfirmation {
-        override val title: String = "Revoke device"
-        override val message: String =
-            "Revoke this device's server access? You will be signed out and must re-enroll."
+    data class DeleteVaultFile(val vaultFile: String) : DestructiveConfirmation {
+        override fun title(strings: Strings): String = strings.deleteVaultFileTitle
+        override fun message(strings: Strings): String = strings.deleteVaultFileMessage(vaultFile)
     }
+
+    data object RemoveDeviceLogin : DestructiveConfirmation {
+        override fun title(strings: Strings): String = strings.removeDeviceLoginTitle
+        override fun message(strings: Strings): String = strings.removeDeviceLoginMessage
+    }
+
+    data class RemoveServerRecords(val secretIds: Set<String>) : DestructiveConfirmation {
+        init {
+            require(secretIds.isNotEmpty()) { "At least one server record must be selected" }
+        }
+
+        override fun title(strings: Strings): String = strings.removeServerRecordsTitle
+        override fun message(strings: Strings): String =
+            strings.removeServerRecordsMessage(secretIds.size)
+    }
+
 }
 
 /**

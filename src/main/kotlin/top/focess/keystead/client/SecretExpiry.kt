@@ -3,6 +3,8 @@ package top.focess.keystead.client
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoUnit
+import top.focess.keystead.client.i18n.EnStrings
+import top.focess.keystead.client.i18n.Strings
 
 /**
  * Status of a secret's optional expiry date, relative to "today". Expiry is stored as a free-form
@@ -13,17 +15,10 @@ internal enum class SecretExpiryStatus { ACTIVE, DUE_SOON, EXPIRED }
 
 internal data class SecretExpiryState(val status: SecretExpiryStatus, val daysRemaining: Long) {
     /** Human-readable reminder label for the row and summary banner. */
-    fun label(): String =
-        when (status) {
-            SecretExpiryStatus.EXPIRED -> {
-                val days = -daysRemaining
-                if (days == 1L) "expired 1 day ago" else "expired $days days ago"
-            }
-            SecretExpiryStatus.DUE_SOON ->
-                if (daysRemaining == 0L) "expires today" else "expires in $daysRemaining days"
-            SecretExpiryStatus.ACTIVE ->
-                if (daysRemaining == 1L) "expires in 1 day" else "expires in $daysRemaining days"
-        }
+    fun label(): String = label(EnStrings)
+
+    /** Locale-aware reminder label. */
+    fun label(strings: Strings): String = strings.expiryLabel(status, daysRemaining)
 }
 
 /** Classifies a secret's expiry attribute into a reminder state. */

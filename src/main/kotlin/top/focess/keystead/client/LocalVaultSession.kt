@@ -1,28 +1,33 @@
 package top.focess.keystead.client
 
+import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.charset.StandardCharsets
+import java.time.Clock
 import java.util.Base64
 import java.util.UUID
+import top.focess.keystead.access.VaultAccessKeyContextCodec
+import top.focess.keystead.access.VaultAccessRequestCodec
 import top.focess.keystead.crypto.DefaultCryptoService
 import top.focess.keystead.memory.SecretBuffer
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.model.SecretClassification
 import top.focess.keystead.model.SecretId
 import top.focess.keystead.model.SecretType
+import top.focess.keystead.model.SlotType
 import top.focess.keystead.model.VaultFingerprint
 import top.focess.keystead.model.KeyId
 import top.focess.keystead.service.CreateVaultRequest
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.EncryptedSyncRecord
-import top.focess.keystead.service.SyncImportReport
+import top.focess.keystead.service.FullVaultBackupService
 import top.focess.keystead.service.DeviceVaultKeyPackage
-import top.focess.keystead.service.PreparedVaultKeyRotation
+import top.focess.keystead.service.SyncImportConflict
+import top.focess.keystead.service.SyncImportRejection
 import top.focess.keystead.service.VaultHandle
-import top.focess.keystead.recovery.RecoveryCryptoService
-import top.focess.keystead.recovery.RecoveryPublicKey
-import top.focess.keystead.recovery.RecoveryVaultKeyPackage
+import top.focess.keystead.store.VaultFileFormat
 
 data class LoginListItem(
     val id: String,
@@ -57,6 +62,23 @@ data class SecretEditSnapshot(
     override fun toString(): String = "SecretEditSnapshot(<redacted>)"
 }
 
+data class DeviceKeySlot(
+    val slotKeyId: String,
+)
+
+data class LocalVaultDeviceSlots(
+    val fingerprint: String,
+    val slots: List<DeviceKeySlot>,
+)
+
+data class PersonalVaultPullResult(
+    val imported: Int,
+    val skipped: Int,
+    val conflicts: List<SyncImportConflict>,
+    val rejected: List<SyncImportRejection>,
+    val highestSequence: Long,
+)
+
 class LocalVaultSession private constructor(
     private val service: DefaultVaultService,
     private var handle: VaultHandle,
@@ -68,63 +90,81 @@ class LocalVaultSession private constructor(
     internal fun vaultKeyIdValue(): String = handle.vaultKeyId().value()
     internal fun vaultFile(): Path = file
 
-    /**
-     * Exports every encrypted record and tombstone in the vault for a full backup. Rows stay
-     * encrypted; no plaintext or vault key material leaves the handle.
-     */
-    internal fun exportAllRecords(): List<EncryptedSyncRecord> = handle.exportRecordsSince(0L)
+    internal fun exportFullBackup(
+        backupPassword: CharArray,
+        output: OutputStream,
+    ) {
+        val password = backupPassword.copyOf()
+        try {
+            FullVaultBackupService().export(handle, password, output)
+        } finally {
+            Wipe.wipe(password)
+            Wipe.wipe(backupPassword)
+        }
+    }
 
-    /** Imports a backup batch of encrypted sync records, returning the per-row outcome. */
-    internal fun importBackupRecords(records: List<EncryptedSyncRecord>): SyncImportReport =
-        handle.importRecordsWithReport(records)
-    internal fun prepareVaultKeyRotation(): PreparedVaultKeyRotation = handle.prepareVaultKeyRotation()
     internal fun wrapCurrentVaultKey(publicKey: ByteArray, context: ByteArray): DeviceVaultKeyPackage =
         handle.wrapVaultKeyPackageForDevice(publicKey, context)
-    internal fun wrapRecoveryVaultKey(
-        recovery: RecoveryCryptoService,
-        recoveryKey: RecoveryPublicKey,
-        username: String,
-    ): RecoveryVaultKeyPackage =
-        recovery.wrapVaultKey(handle, recoveryKey, username)
-
-    internal fun resumeVaultKeyRotation(
-        keyPackage: ServerRotationPackage,
-        identity: LocalDeviceIdentity,
-    ): PreparedVaultKeyRotation {
-        val encrypted = Base64.getDecoder().decode(keyPackage.encryptedVaultKey)
-        val privateKey = identity.privateKey()
-        val context = vaultKeyPackageContext(fingerprintValue(), identity.deviceId)
-        val packageAlgorithm =
-            if (keyPackage.keyAlgorithm == identity.keyAlgorithm) {
-                DefaultVaultService.DEVICE_KEY_PACKAGE_ALGORITHM
-            } else {
-                keyPackage.keyAlgorithm
-            }
+    /** Enrolls the dedicated local-unlock credential without using the server transfer identity. */
+    internal fun enrollLocalLogin(credential: LocalUnlockCredential): String {
+        val publicKey = credential.publicKey()
+        val context = vaultKeyPackageContext(fingerprintValue(), credential.bindingId)
         return try {
-            handle.resumeVaultKeyRotation(
-                DeviceVaultKeyPackage(
-                    handle.vaultFingerprint(),
-                    KeyId(keyPackage.vaultKeyId),
-                    packageAlgorithm,
-                    encrypted,
-                ),
-                privateKey,
-                context,
-            )
+            handle.addDeviceKey(publicKey, context).value()
         } finally {
-            Wipe.wipe(encrypted)
-            Wipe.wipe(privateKey)
+            Wipe.wipe(publicKey)
             Wipe.wipe(context)
         }
     }
 
-    internal fun commitPreparedRotation(
-        prepared: PreparedVaultKeyRotation,
-        keyPackage: DeviceVaultKeyPackage,
-    ) {
-        val previous = handle
-        handle = prepared.commitWithDevicePackage(keyPackage)
-        previous.close()
+    /** Enables the single local-login entry only when this vault has no DEVICE slot yet. */
+    internal fun ensureLocalLogin(credential: LocalUnlockCredential): Boolean {
+        if (deviceSlots().isNotEmpty()) return false
+        enrollLocalLogin(credential)
+        return true
+    }
+
+    /**
+     * Replaces every legacy DEVICE slot with one dedicated local-login slot. The new slot is added
+     * first so a server-provisioned vault, whose transfer slot may be its only slot, never loses its
+     * final access path during the transition.
+     */
+    internal fun replaceLocalLogin(credential: LocalUnlockCredential): String {
+        val legacySlots = deviceSlots()
+        val localSlot = enrollLocalLogin(credential)
+        legacySlots.forEach { slot -> revokeDeviceKey(slot.slotKeyId) }
+        return localSlot
+    }
+
+    /** Replaces server-provisioning DEVICE slots with a local master-passphrase slot. */
+    internal fun installMasterPassphrase(passphrase: CharArray): Int {
+        require(passphrase.isNotEmpty()) { "Vault master passphrase must not be empty" }
+        handle.addPassphrase(passphrase)
+        return removeDeviceLogin()
+    }
+
+    /** Removes a DEVICE key slot by its key id, revoking passphrase-less unlock for that device. */
+    internal fun revokeDeviceKey(slotKeyId: String) {
+        handle.removeDeviceKey(KeyId(slotKeyId))
+    }
+
+    /** Removes every current and legacy DEVICE slot while retaining passphrase access. */
+    internal fun removeDeviceLogin(): Int {
+        val slots = deviceSlots()
+        slots.forEach { slot -> revokeDeviceKey(slot.slotKeyId) }
+        return slots.size
+    }
+
+    /**
+     * Lists the DEVICE key slots currently enrolled on the vault, by slot key id. Reads the
+     * plaintext header directly; the on-disk lock guards a sibling ".lock" file rather than the
+     * data file, so this is safe to call while the vault handle is open.
+     */
+    internal fun deviceSlots(): List<DeviceKeySlot> {
+        val header = VaultFileFormat.readHeader(Files.readAllBytes(file))
+        return header.slots()
+            .filter { it.slotType() == SlotType.DEVICE }
+            .map { DeviceKeySlot(it.slotKeyId().value()) }
     }
 
     fun addLogin(
@@ -299,92 +339,104 @@ class LocalVaultSession private constructor(
         handle.deleteSecret(SecretId(UUID.fromString(secretId)))
     }
 
-    fun pushRecordsTo(client: KeysteadServerClient, sinceRevision: Long): Int {
-        val records = handle.exportRecordsSince(sinceRevision)
-        pushRecords(client, records)
-        return records.size
-    }
+    /** Publishes a complete idempotent snapshot to the account's one personal event stream. */
+    fun pushAllPersonalRecordsTo(client: KeysteadServerClient): Int =
+        pushPersonalRecords(client, handle.exportRecordsSince(0))
 
-    fun pushPendingRecordsTo(client: KeysteadServerClient, stateStore: SyncStateStore): Int {
+    /** Publishes only the selected current records without advancing the global sync cursor. */
+    fun pushSelectedPersonalRecordsTo(
+        client: KeysteadServerClient,
+        secretIds: Set<String>,
+    ): Int =
+        pushPersonalRecords(
+            client,
+            handle.exportRecordsSince(0).filter { it.secretId() in secretIds },
+        )
+
+    internal fun currentPersonalRecords(): List<EncryptedSyncRecord> =
+        handle.exportRecordsSince(0)
+
+    fun pushPendingPersonalRecordsTo(
+        client: KeysteadServerClient,
+        stateStore: SyncStateStore,
+    ): Int {
         val fingerprint = fingerprintValue()
         val records = handle.exportRecordsSince(stateStore.lastPushedRevision(fingerprint))
-        pushRecords(client, records)
+        val published = pushPersonalRecords(client, records)
         records.maxOfOrNull { it.revision() }?.let { stateStore.recordPushed(fingerprint, it) }
+        return published
+    }
+
+    private fun pushPersonalRecords(
+        client: KeysteadServerClient,
+        records: List<EncryptedSyncRecord>,
+    ): Int {
+        records.forEach { record ->
+            val unsigned =
+                PersonalVaultRecordEvent(
+                    eventId = "pending",
+                    fingerprint = record.fingerprint(),
+                    secretId = record.secretId(),
+                    revision = record.revision(),
+                    secretType = record.secretType(),
+                    encryptedProfile = record.encryptedProfile(),
+                    envelope = record.envelope(),
+                    deleted = record.deleted(),
+                )
+            client.appendPersonalRecord(
+                unsigned.copy(eventId = PersonalRecordEventId.of(unsigned)),
+            )
+        }
         return records.size
     }
 
-    private fun pushRecords(client: KeysteadServerClient, records: List<EncryptedSyncRecord>) {
-        records.forEach { record ->
-            if (record.deleted()) {
-                client.deleteRecord(record.fingerprint(), record.secretId(), record.revision())
-            } else {
-                client.putRecord(
-                    record.fingerprint(),
-                    record.secretId(),
-                    ServerEncryptedRecord(
-                        revision = record.revision(),
-                        secretType = record.secretType(),
-                        encryptedProfile = record.encryptedProfile(),
-                        envelope = record.envelope(),
-                        deleted = false,
-                    ),
-                )
-            }
-        }
-    }
-
-    fun pullRecordsFrom(client: KeysteadServerClient, sinceRevision: Long): Int {
-        return pullRecordPagesFrom(client, sinceRevision).imported
-    }
-
-    fun pullPendingRecordsFrom(client: KeysteadServerClient, stateStore: SyncStateStore): Int {
+    fun pullPendingPersonalRecordsFrom(
+        client: KeysteadServerClient,
+        stateStore: SyncStateStore,
+    ): PersonalVaultPullResult {
         val fingerprint = fingerprintValue()
-        val result = pullRecordPagesFrom(client, stateStore.lastPulledRevision(fingerprint))
-        stateStore.recordPulled(fingerprint, result.highestRevision)
-        return result.imported
-    }
-
-    private fun pullRecordPagesFrom(client: KeysteadServerClient, sinceRevision: Long): PullResult {
-        val fingerprint = fingerprintValue()
-        var cursor = sinceRevision
-        var highestRevision = sinceRevision
+        var cursor = stateStore.lastPulledServerSequence(fingerprint)
         var imported = 0
+        var skipped = 0
+        val conflicts = mutableListOf<SyncImportConflict>()
+        val rejected = mutableListOf<SyncImportRejection>()
         do {
-            val page = client.listRecordPage(fingerprint, cursor, syncPageLimit)
-            imported += importServerRecords(page.records)
-            highestRevision = maxOf(highestRevision, page.highestRevision)
-            val nextCursor = page.nextSinceRevision ?: page.highestRevision
+            val page = client.listPersonalRecordPage(cursor, syncPageLimit)
+            val report =
+                handle.importRecordsWithReport(
+                    page.records.map { record ->
+                        EncryptedSyncRecord(
+                            record.fingerprint,
+                            record.secretId,
+                            record.revision,
+                            record.secretType,
+                            record.encryptedProfile,
+                            record.envelope,
+                            record.deleted,
+                        )
+                    },
+                )
+            imported += report.imported()
+            skipped += report.skipped()
+            conflicts += report.conflicts()
+            rejected += report.rejected()
+            val nextCursor = page.nextSequence ?: page.highestSequence
             if (page.hasMore && nextCursor <= cursor) {
                 throw IllegalStateException(
-                    "Server record page did not advance cursor for vault $fingerprint from revision $cursor",
+                    "Server personal record page did not advance from sequence $cursor",
                 )
             }
             cursor = nextCursor
         } while (page.hasMore)
-        return PullResult(imported, highestRevision)
-    }
-
-    private fun importServerRecords(records: List<ServerEncryptedRecord>): Int {
-        val fingerprint = fingerprintValue()
-        return handle.importRecords(
-            records.map { record ->
-                EncryptedSyncRecord(
-                    fingerprint,
-                    requireNotNull(record.secretId) { "Server record is missing secretId" },
-                    record.revision,
-                    record.secretType,
-                    record.encryptedProfile,
-                    record.envelope,
-                    record.deleted,
-                )
-            },
+        stateStore.recordPulledServerSequence(fingerprint, cursor)
+        return PersonalVaultPullResult(
+            imported = imported,
+            skipped = skipped,
+            conflicts = conflicts,
+            rejected = rejected,
+            highestSequence = cursor,
         )
     }
-
-    private data class PullResult(
-        val imported: Int,
-        val highestRevision: Long,
-    )
 
     private fun loginEditSnapshot(secretId: String): SecretEditSnapshot {
         var title = ""
@@ -461,101 +513,6 @@ class LocalVaultSession private constructor(
         )
     }
 
-    private fun publishVaultKeyPackage(
-        client: KeysteadServerClient,
-        deviceId: String,
-        keyAlgorithm: String,
-        devicePublicKey: ByteArray,
-    ): ServerVaultKeyPackage {
-        require(keyAlgorithm == DefaultCryptoService.DEVICE_KEY_ALGORITHM) {
-            "Unsupported device wrapping key algorithm"
-        }
-        val fingerprint = fingerprintValue()
-        val context = vaultKeyPackageContext(fingerprint, deviceId)
-        val wrapped = handle.wrapVaultKeyPackageForDevice(devicePublicKey, context)
-        val encryptedVaultKey = wrapped.encryptedVaultKey()
-        return try {
-            val keyPackage =
-                ServerVaultKeyPackage(
-                    fingerprint = fingerprint,
-                    deviceId = deviceId,
-                    vaultKeyId = wrapped.vaultKeyId().value(),
-                    keyAlgorithm = wrapped.keyAlgorithm(),
-                    encryptedVaultKey = Base64.getEncoder().encodeToString(encryptedVaultKey),
-                )
-            client.putVaultKeyPackage(fingerprint, deviceId, keyPackage)
-            keyPackage
-        } finally {
-            Wipe.wipe(encryptedVaultKey)
-        }
-    }
-
-    internal fun publishVaultKeyPackage(
-        client: KeysteadServerClient,
-        identity: LocalDeviceIdentity,
-        enrolledDevice: ServerDevice,
-    ): ServerVaultKeyPackage {
-        val proofPublicKey = identity.proofPublicKey()
-        val wrappingPublicKey = identity.publicKey()
-        return try {
-            check(enrolledDevice.deviceId == identity.deviceId) {
-                "Enrolled device does not match the local identity"
-            }
-            check(enrolledDevice.keyAlgorithm == identity.proofKeyAlgorithm)
-            check(
-                enrolledDevice.publicKey ==
-                    Base64.getEncoder().encodeToString(proofPublicKey),
-            )
-            check(enrolledDevice.wrappingKeyAlgorithm == identity.keyAlgorithm)
-            check(
-                enrolledDevice.wrappingPublicKey ==
-                    Base64.getEncoder().encodeToString(wrappingPublicKey),
-            )
-            publishVaultKeyPackage(client, enrolledDevice)
-        } finally {
-            Wipe.wipe(proofPublicKey)
-            Wipe.wipe(wrappingPublicKey)
-        }
-    }
-
-    internal fun publishVaultKeyPackage(
-        client: KeysteadServerClient,
-        enrolledDevice: ServerDevice,
-    ): ServerVaultKeyPackage {
-        check(enrolledDevice.canReceiveVaultKeyPackage) {
-            "Device is not eligible for a vault key package"
-        }
-        check(enrolledDevice.wrappingKeyAlgorithm == DefaultCryptoService.DEVICE_KEY_ALGORITHM) {
-            "Unsupported device wrapping key algorithm"
-        }
-        val publicKey =
-            Base64.getDecoder().decode(requireNotNull(enrolledDevice.wrappingPublicKey))
-        return try {
-            publishVaultKeyPackage(
-                client = client,
-                deviceId = enrolledDevice.deviceId,
-                keyAlgorithm = requireNotNull(enrolledDevice.wrappingKeyAlgorithm),
-                devicePublicKey = publicKey,
-            )
-        } finally {
-            Wipe.wipe(publicKey)
-        }
-    }
-
-    fun publishVaultKeyPackagesForRegisteredDevices(client: KeysteadServerClient): Int {
-        var published = 0
-        client.listDevices()
-            .filter {
-                it.canReceiveVaultKeyPackage &&
-                    it.wrappingKeyAlgorithm == DefaultCryptoService.DEVICE_KEY_ALGORITHM
-            }
-            .forEach { device ->
-                publishVaultKeyPackage(client, device)
-                published++
-            }
-        return published
-    }
-
     fun rotateVaultKey(masterPassword: CharArray): String {
         val password = masterPassword.copyOf()
         return try {
@@ -573,49 +530,27 @@ class LocalVaultSession private constructor(
         }
     }
 
-    fun rotateVaultKeyAndPublish(
-        client: KeysteadServerClient,
-        masterPassword: CharArray,
-    ): String {
-        val vaultKeyId = rotateVaultKey(masterPassword)
-        client.rotateVaultKey(fingerprintValue(), vaultKeyId)
-        publishVaultKeyPackagesForRegisteredDevices(client)
-        return vaultKeyId
-    }
-
-    fun publishAutomationVaultKeyPackage(
-        client: KeysteadServerClient,
-        principalId: String,
-        publicKey: ByteArray,
-    ): ServerAutomationVaultKeyPackage {
-        val fingerprint = fingerprintValue()
-        val context = automationVaultKeyPackageContext(fingerprint, principalId)
-        val wrapped = handle.wrapVaultKeyPackageForDevice(publicKey, context)
-        val encryptedVaultKey = wrapped.encryptedVaultKey()
-        return try {
-            ServerAutomationVaultKeyPackage(
-                vaultKeyId = wrapped.vaultKeyId().value(),
-                keyAlgorithm = wrapped.keyAlgorithm(),
-                encryptedVaultKey = Base64.getEncoder().encodeToString(encryptedVaultKey),
-            ).also { client.putAutomationVaultKeyPackage(fingerprint, principalId, it) }
-        } finally {
-            Wipe.wipe(encryptedVaultKey)
-            Wipe.wipe(context)
-        }
-    }
-
     override fun close() {
         handle.close()
     }
 
     companion object {
-        fun vaultKeyPackageContext(fingerprint: String, deviceId: String): ByteArray =
-            "keystead-vault-key-package-v1|vault:$fingerprint|device:$deviceId"
+        fun vaultKeyPackageContext(fingerprint: String, bindingId: String): ByteArray =
+            "keystead-vault-key-package-v1|vault:$fingerprint|device:$bindingId"
                 .toByteArray(StandardCharsets.UTF_8)
 
-        fun automationVaultKeyPackageContext(fingerprint: String, principalId: String): ByteArray =
-            "keystead-automation-vault-key-package-v1|vault:$fingerprint|principal:$principalId"
-                .toByteArray(StandardCharsets.UTF_8)
+        /** Reads only non-secret header metadata so locked-vault UI can verify local enrollment. */
+        internal fun inspectDeviceSlots(file: Path): LocalVaultDeviceSlots? {
+            if (!Files.isRegularFile(file)) return null
+            val header = VaultFileFormat.readHeader(Files.readAllBytes(file))
+            return LocalVaultDeviceSlots(
+                fingerprint = header.fingerprint().toHexString(),
+                slots =
+                    header.slots()
+                        .filter { it.slotType() == SlotType.DEVICE }
+                        .map { DeviceKeySlot(it.slotKeyId().value()) },
+            )
+        }
 
         fun openOrCreate(file: Path, masterPassword: CharArray): LocalVaultSession {
             val service = DefaultVaultService()
@@ -635,87 +570,128 @@ class LocalVaultSession private constructor(
             }
         }
 
-        fun openProvisionedFromServer(
+        fun restoreFullBackup(
             file: Path,
-            fingerprint: String,
-            deviceId: String,
-            devicePrivateKey: ByteArray,
-            client: KeysteadServerClient,
+            input: InputStream,
+            backupPassword: CharArray,
+            newMasterPassphrase: CharArray,
         ): LocalVaultSession {
-            val service = DefaultVaultService()
-            val privateKey = devicePrivateKey.copyOf()
-            val context = vaultKeyPackageContext(fingerprint, deviceId)
-            var wrappedVaultKey: ByteArray? = null
+            val backup = backupPassword.copyOf()
+            val master = newMasterPassphrase.copyOf()
+            val crypto = DefaultCryptoService()
+            val clock = Clock.systemUTC()
+            val service = DefaultVaultService(crypto, clock)
             return try {
                 val handle =
-                    if (Files.exists(file)) {
-                        service.openVaultWithDeviceKey(file, privateKey, context)
-                    } else {
-                        file.parent?.let { Files.createDirectories(it) }
-                        val keyPackage =
-                            client.listVaultKeyPackages(fingerprint)
-                                .firstOrNull { it.deviceId == deviceId }
-                                ?: throw IllegalStateException(
-                                    "Server did not return a vault key package for device $deviceId",
-                                )
-                        wrappedVaultKey = Base64.getDecoder().decode(keyPackage.encryptedVaultKey)
-                        val devicePackage =
-                            DeviceVaultKeyPackage(
-                                VaultFingerprint.fromHexString(fingerprint),
-                                KeyId(keyPackage.vaultKeyId),
-                                keyPackage.keyAlgorithm,
-                                wrappedVaultKey,
-                            )
-                        service.provisionVault(file, devicePackage, privateKey, context)
-                    }
+                    FullVaultBackupService(crypto, clock)
+                        .restore(file, input, backup, master)
+                LocalVaultSession(service, handle, file)
+            } finally {
+                Wipe.wipe(backup)
+                Wipe.wipe(master)
+                Wipe.wipe(backupPassword)
+                Wipe.wipe(newMasterPassphrase)
+            }
+        }
+
+        /** Opens a vault with the dedicated local credential; server transfer identities are not accepted. */
+        fun openWithLocalLogin(
+            file: Path,
+            credential: LocalUnlockCredential,
+        ): LocalVaultSession {
+            val service = DefaultVaultService()
+            val privateKey = credential.privateKey()
+            var context: ByteArray? = null
+            return try {
+                val fingerprint =
+                    VaultFileFormat.readHeader(Files.readAllBytes(file)).fingerprint().toHexString()
+                context = vaultKeyPackageContext(fingerprint, credential.bindingId)
+                val handle = service.openVaultWithDeviceKey(file, privateKey, context)
                 LocalVaultSession(service, handle, file)
             } finally {
                 Wipe.wipe(privateKey)
-                Wipe.wipe(context)
-                Wipe.wipe(wrappedVaultKey)
+                context?.let { Wipe.wipe(it) }
             }
         }
 
         fun openProvisionedFromServer(
             file: Path,
-            fingerprint: String,
-            identity: LocalDeviceIdentity,
-            client: KeysteadServerClient,
+            request: ServerVaultAccessRequest,
+            exchangeSession: EphemeralVaultAccessSession,
         ): LocalVaultSession {
-            val privateKey = identity.privateKey()
-            return try {
-                openProvisionedFromServer(
-                    file = file,
-                    fingerprint = fingerprint,
-                    deviceId = identity.deviceId,
-                    devicePrivateKey = privateKey,
-                    client = client,
-                )
+            require(file.fileName.toString().endsWith(".kvault", ignoreCase = true)) {
+                "Server restore target must use the .kvault extension"
+            }
+            check(!Files.exists(file)) {
+                "Server restore target must be a new vault file"
+            }
+            check(request.state == ServerVaultAccessRequestState.APPROVED) {
+                "Vault access request has not been approved"
+            }
+            check(request.requestId == exchangeSession.requestId) {
+                "Approved request does not belong to this login session"
+            }
+            val packageValue =
+                request.approvedPackage
+                    ?: throw IllegalStateException("Approved request did not include a vault key package")
+            val canonical = Base64.getUrlDecoder().decode(request.canonicalRequest)
+            var publicKey: ByteArray? = null
+            var encryptedVaultKey: ByteArray? = null
+            var context: ByteArray? = null
+            try {
+                val decoded = VaultAccessRequestCodec.decode(canonical)
+                check(decoded.requestId() == request.requestId)
+                check(decoded.accountId() == request.accountId)
+                check(decoded.serverOrigin() == request.serverOrigin)
+                check(decoded.keyAlgorithm() == request.keyAlgorithm)
+                check(VaultAccessRequestCodec.fingerprint(decoded) == request.fingerprint)
+                check(decoded.keyAlgorithm() == exchangeSession.keyAlgorithm)
+                check(decoded.requestId() == exchangeSession.requestId)
+                publicKey = decoded.exchangePublicKey()
+                check(requireNotNull(publicKey).contentEquals(exchangeSession.publicKey)) {
+                    "Approved request uses a different exchange key"
+                }
+                check(packageValue.keyAlgorithm == DefaultVaultService.DEVICE_KEY_PACKAGE_ALGORITHM) {
+                    "Vault access key package algorithm is unsupported"
+                }
+                encryptedVaultKey = Base64.getDecoder().decode(packageValue.encryptedVaultKey)
+                context =
+                    VaultAccessKeyContextCodec.encode(
+                        canonical,
+                        packageValue.fingerprint,
+                        packageValue.vaultKeyId,
+                    )
+                val keyPackage =
+                    DeviceVaultKeyPackage(
+                        VaultFingerprint.fromHexString(packageValue.fingerprint),
+                        KeyId(packageValue.vaultKeyId),
+                        packageValue.keyAlgorithm,
+                        requireNotNull(encryptedVaultKey),
+                    )
+                var opened: LocalVaultSession? = null
+                exchangeSession.withPrivateKey { privateKey ->
+                    file.parent?.let { Files.createDirectories(it) }
+                    val vaultService = DefaultVaultService()
+                    opened =
+                        LocalVaultSession(
+                            vaultService,
+                            vaultService.provisionVault(
+                                file,
+                                keyPackage,
+                                privateKey,
+                                requireNotNull(context),
+                            ),
+                            file,
+                        )
+                }
+                return requireNotNull(opened)
             } finally {
-                Wipe.wipe(privateKey)
+                Wipe.wipe(canonical)
+                publicKey?.let(Wipe::wipe)
+                encryptedVaultKey?.let(Wipe::wipe)
+                context?.let(Wipe::wipe)
             }
         }
 
-        fun openFirstProvisionedFromServer(
-            file: Path,
-            identity: LocalDeviceIdentity,
-            client: KeysteadServerClient,
-        ): LocalVaultSession {
-            val vault =
-                client.listVaults()
-                    .firstOrNull { serverVault ->
-                        client.listVaultKeyPackages(serverVault.fingerprint)
-                            .any { it.deviceId == identity.deviceId }
-                    }
-                    ?: throw IllegalStateException(
-                        "Server did not return a provisioned vault for device ${identity.deviceId}",
-                    )
-            return openProvisionedFromServer(
-                file = file,
-                fingerprint = vault.fingerprint,
-                identity = identity,
-                client = client,
-            )
-        }
     }
 }

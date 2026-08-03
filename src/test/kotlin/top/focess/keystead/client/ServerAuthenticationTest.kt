@@ -112,7 +112,7 @@ class ServerAuthenticationTest {
             responseFor = { request ->
                 when (request.path) {
                     "/api/v1/auth/login" -> tokenResponse("access-one", "refresh-one", "2026-07-12T00:05:00Z")
-                    "/api/v1/devices" -> TestResponse(200, "[]")
+                    "/api/v1/vault/records?afterSequence=0&limit=1" -> personalRecordPage()
                     else -> error("Unexpected request: ${request.method} ${request.path}")
                 }
             },
@@ -126,7 +126,7 @@ class ServerAuthenticationTest {
                     assertFalse(session.toString().contains("access-one"))
                     assertFalse(session.toString().contains("refresh-one"))
 
-                    assertEquals(emptyList(), session.client().listDevices())
+                    assertEquals(emptyList(), session.client().listPersonalRecordPage(0, 1).records)
                 }
 
             assertEquals(2, requests.size)
@@ -144,7 +144,7 @@ class ServerAuthenticationTest {
                 when (request.path) {
                     "/api/v1/auth/login" -> tokenResponse("access-old", "refresh-old", "2026-07-11T23:59:59Z")
                     "/api/v1/auth/refresh" -> tokenResponse("access-new", "refresh-new", "2026-07-12T00:05:00Z")
-                    "/api/v1/devices" -> TestResponse(200, "[]")
+                    "/api/v1/vault/records?afterSequence=0&limit=1" -> personalRecordPage()
                     "/api/v1/auth/revoke" -> TestResponse(204)
                     else -> error("Unexpected request: ${request.method} ${request.path}")
                 }
@@ -153,7 +153,7 @@ class ServerAuthenticationTest {
             KeysteadServerAuthClient(baseUrl, clock = clock)
                 .login("alice", "server-password".toCharArray())
                 .use { session ->
-                    assertEquals(emptyList(), session.client().listDevices())
+                    assertEquals(emptyList(), session.client().listPersonalRecordPage(0, 1).records)
                     session.revoke()
                 }
 
@@ -161,7 +161,7 @@ class ServerAuthenticationTest {
                 listOf(
                     "/api/v1/auth/login",
                     "/api/v1/auth/refresh",
-                    "/api/v1/devices",
+                    "/api/v1/vault/records?afterSequence=0&limit=1",
                     "/api/v1/auth/revoke",
                 ),
                 requests.map { it.path },
@@ -180,7 +180,7 @@ class ServerAuthenticationTest {
                 when (request.path) {
                     "/api/v1/auth/login" -> tokenResponse("access-old", "refresh-old", "2026-07-11T23:59:59Z")
                     "/api/v1/auth/refresh" -> tokenResponse("access-new", "refresh-new", "2026-07-12T00:05:00Z")
-                    "/api/v1/devices" -> TestResponse(200, "[]")
+                    "/api/v1/vault/records?afterSequence=0&limit=1" -> personalRecordPage()
                     else -> error("Unexpected request: ${request.method} ${request.path}")
                 }
             },
@@ -195,15 +195,15 @@ class ServerAuthenticationTest {
                     try {
                         val calls =
                             List(2) {
-                                executor.submit<List<ServerDevice>> {
+                                executor.submit<PersonalVaultRecordPage> {
                                     ready.countDown()
                                     check(start.await(5, TimeUnit.SECONDS))
-                                    client.listDevices()
+                                    client.listPersonalRecordPage(0, 1)
                                 }
                             }
                         assertTrue(ready.await(5, TimeUnit.SECONDS))
                         start.countDown()
-                        calls.forEach { assertEquals(emptyList(), it.get(5, TimeUnit.SECONDS)) }
+                        calls.forEach { assertEquals(emptyList(), it.get(5, TimeUnit.SECONDS).records) }
                     } finally {
                         start.countDown()
                         executor.shutdownNow()
@@ -212,7 +212,10 @@ class ServerAuthenticationTest {
                 }
 
             assertEquals(1, requests.count { it.path == "/api/v1/auth/refresh" })
-            assertEquals(2, requests.count { it.path == "/api/v1/devices" })
+            assertEquals(
+                2,
+                requests.count { it.path == "/api/v1/vault/records?afterSequence=0&limit=1" },
+            )
         }
 
     @Test
@@ -236,7 +239,7 @@ class ServerAuthenticationTest {
             assertTrue(requests.last().body.contains("\"refreshToken\":\"refresh-one\""))
             assertEquals("", requests.last().authorization)
             assertFailsWith<IllegalStateException> { session.client() }
-            assertFailsWith<IllegalStateException> { client.listDevices() }
+            assertFailsWith<IllegalStateException> { client.listPersonalRecordPage(0, 1) }
             assertEquals(2, requests.size)
         }
 
@@ -260,7 +263,7 @@ class ServerAuthenticationTest {
 
             assertEquals("Bearer access-one", requests.last().authorization)
             assertFailsWith<IllegalStateException> { session.client() }
-            assertFailsWith<IllegalStateException> { client.listDevices() }
+            assertFailsWith<IllegalStateException> { client.listPersonalRecordPage(0, 1) }
             assertEquals(2, requests.size)
         }
 
@@ -465,6 +468,12 @@ class ServerAuthenticationTest {
         TestResponse(
             200,
             """{"accessToken":"$accessToken","refreshToken":"$refreshToken","accessTokenExpiresAt":"$accessExpiresAt","refreshTokenExpiresAt":"2026-08-11T00:00:00Z"}""",
+        )
+
+    private fun personalRecordPage() =
+        TestResponse(
+            200,
+            """{"afterSequence":0,"records":[],"highestSequence":0,"hasMore":false,"nextSequence":null}""",
         )
 
     private fun withServer(

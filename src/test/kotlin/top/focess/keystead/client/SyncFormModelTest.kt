@@ -8,39 +8,48 @@ import kotlin.test.assertTrue
 
 class SyncFormModelTest {
     @Test
-    fun serverLoginRequiresUrlAndCredentials() {
+    fun serverLoginRequiresOnlineServerUrlAndCredentials() {
         assertTrue(
             SyncFormModel.canLogin(
                 serverUrl = "http://localhost:8080",
                 username = "alice",
                 password = "secret",
+                serverAvailable = true,
             ),
         )
-        assertFalse(SyncFormModel.canLogin("", "alice", "secret"))
-        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "", "secret"))
-        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "alice", ""))
-        assertTrue(
-            SyncFormModel.canLoginWithDevice(
-                "http://localhost:8080",
-                "alice",
-                "secret",
-                identityLoaded = true,
-            ),
-        )
-        assertFalse(
-            SyncFormModel.canLoginWithDevice(
-                "http://localhost:8080",
-                "alice",
-                "secret",
-                identityLoaded = false,
-            ),
-        )
+        assertFalse(SyncFormModel.canLogin("", "alice", "secret", serverAvailable = true))
+        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "", "secret", serverAvailable = true))
+        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "alice", "", serverAvailable = true))
+        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "alice", "secret", serverAvailable = false))
     }
 
     @Test
-    fun protectedServerActionsRequireAuthenticatedSession() {
-        assertTrue(SyncFormModel.canUseServer(authenticated = true))
-        assertFalse(SyncFormModel.canUseServer(authenticated = false))
+    fun protectedServerActionsRequireOnlineServerAndAuthenticatedSession() {
+        assertTrue(SyncFormModel.canUseServer(authenticated = true, serverAvailable = true))
+        assertFalse(SyncFormModel.canUseServer(authenticated = false, serverAvailable = true))
+        assertFalse(SyncFormModel.canUseServer(authenticated = true, serverAvailable = false))
+    }
+
+    @Test
+    fun connectionSettingsStayEditableWhenTheCurrentServerIsOffline() {
+        assertTrue(
+            SyncFormModel.canEditConnection(
+                authenticated = true,
+                serverAvailable = false,
+            ),
+        )
+        assertTrue(
+            SyncFormModel.canEditConnection(
+                authenticated = false,
+                serverAvailable = true,
+            ),
+        )
+        assertFalse(
+            SyncFormModel.canEditConnection(
+                authenticated = true,
+                serverAvailable = true,
+            ),
+        )
     }
 
     @Test
@@ -50,54 +59,13 @@ class SyncFormModelTest {
                 serverUrl = "http://localhost:8080",
                 username = "alice",
                 password = "long-password",
+                serverAvailable = true,
             ),
         )
-        assertFalse(SyncFormModel.canRegisterUser("", "alice", "long-password"))
-        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "", "long-password"))
-        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "alice", "short"))
-    }
-
-    @Test
-    fun serverVaultCreationRequiresOpenVaultAndAuthenticatedSession() {
-        assertTrue(
-            SyncFormModel.canCreateServerVault(
-                vaultOpen = true,
-                authenticated = true,
-            ),
-        )
-        assertFalse(SyncFormModel.canCreateServerVault(vaultOpen = false, authenticated = true))
-        assertFalse(SyncFormModel.canCreateServerVault(vaultOpen = true, authenticated = false))
-    }
-
-    @Test
-    fun deviceIdentityRequiresDeviceIdAndPassphrase() {
-        assertTrue(SyncFormModel.canLoadIdentity("laptop-1", "device-passphrase"))
-        assertFalse(SyncFormModel.canLoadIdentity("", "device-passphrase"))
-        assertFalse(SyncFormModel.canLoadIdentity("laptop-1", ""))
-    }
-
-    @Test
-    fun deviceEnrollmentRequiresAuthenticationAndLoadedIdentityButNotOpenVault() {
-        assertTrue(SyncFormModel.canEnrollDevice(authenticated = true, identityLoaded = true))
-        assertFalse(SyncFormModel.canEnrollDevice(authenticated = false, identityLoaded = true))
-        assertFalse(SyncFormModel.canEnrollDevice(authenticated = true, identityLoaded = false))
-    }
-
-    @Test
-    fun deviceRevocationRequiresRegisteredIdentityAndPackagePublicationRequiresVault() {
-        assertTrue(
-            SyncFormModel.canRevokeDevice(
-                authenticated = true,
-                identityLoaded = true,
-                registered = true,
-            ),
-        )
-        assertFalse(SyncFormModel.canRevokeDevice(true, true, false))
-        assertFalse(SyncFormModel.canRevokeDevice(true, false, true))
-        assertFalse(SyncFormModel.canRevokeDevice(false, true, true))
-        assertTrue(SyncFormModel.canPublishKeyPackages(vaultOpen = true, authenticated = true))
-        assertFalse(SyncFormModel.canPublishKeyPackages(vaultOpen = false, authenticated = true))
-        assertFalse(SyncFormModel.canPublishKeyPackages(vaultOpen = true, authenticated = false))
+        assertFalse(SyncFormModel.canRegisterUser("", "alice", "long-password", serverAvailable = true))
+        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "", "long-password", serverAvailable = true))
+        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "alice", "short", serverAvailable = true))
+        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "alice", "long-password", serverAvailable = false))
     }
 
     @Test

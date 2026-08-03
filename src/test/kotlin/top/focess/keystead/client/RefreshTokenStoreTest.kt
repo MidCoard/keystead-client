@@ -3,7 +3,6 @@ package top.focess.keystead.client
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -11,7 +10,7 @@ class RefreshTokenStoreTest {
     @Test
     fun roundTripsPersistedSession() {
         val store = RefreshTokenStore(PersistentTestStorage())
-        val session = persistedSession(deviceId = "dev-1")
+        val session = persistedSession()
 
         store.save(session)
 
@@ -26,7 +25,7 @@ class RefreshTokenStoreTest {
     @Test
     fun clearRemovesPersistedSession() {
         val store = RefreshTokenStore(PersistentTestStorage())
-        store.save(persistedSession(deviceId = "dev-1"))
+        store.save(persistedSession())
 
         store.clear()
 
@@ -38,7 +37,7 @@ class RefreshTokenStoreTest {
         val storage = MemorySecureStorage()
         val store = RefreshTokenStore(storage)
 
-        store.save(persistedSession(deviceId = null))
+        store.save(persistedSession())
 
         assertNull(store.load())
         assertTrue(storage.listKeys("auth", "keystead-desktop").isEmpty())
@@ -47,7 +46,7 @@ class RefreshTokenStoreTest {
     @Test
     fun nullStorageIsNoOp() {
         val store = RefreshTokenStore(null)
-        store.save(persistedSession(deviceId = null))
+        store.save(persistedSession())
         assertNull(store.load())
         store.clear()
     }
@@ -64,21 +63,10 @@ class RefreshTokenStoreTest {
         assertNull(store.load())
     }
 
-    @Test
-    fun nullDeviceIdRoundTripsAsNull() {
-        val store = RefreshTokenStore(PersistentTestStorage())
-        store.save(persistedSession(deviceId = null))
-
-        val loaded = store.load()
-        assertNotNull(loaded)
-        assertNull(loaded!!.deviceId)
-    }
-
-    private fun persistedSession(deviceId: String?): PersistedAuthSession =
+    private fun persistedSession(): PersistedAuthSession =
         PersistedAuthSession(
             baseUrl = "https://server.example.com",
             username = "alice",
-            deviceId = deviceId,
             refreshToken = "rt-abc",
             refreshTokenExpiresAt = Instant.parse("2026-08-11T00:00:00Z"),
         )
@@ -86,7 +74,7 @@ class RefreshTokenStoreTest {
 
 /** A [SecureStorage] backed by an in-memory map but advertising a persistent capability. */
 private class PersistentTestStorage : SecureStorage {
-    override val capability = SecureStorageCapability.OS_USER_PROTECTED
+    override val capability = SecureStorageCapability.OS_BIOMETRIC_GATED
     private val backing = MemorySecureStorage()
 
     override fun save(key: SecureStorageKey, value: ByteArray) = backing.save(key, value)

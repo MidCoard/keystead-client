@@ -3,6 +3,7 @@ package top.focess.keystead.client
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -10,43 +11,70 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.sun.jna.Native
+import com.sun.jna.platform.win32.WinDef
 import java.awt.Dimension
+import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import top.focess.keystead.memory.Wipe
+import top.focess.keystead.client.i18n.AppLocale
+import top.focess.keystead.client.i18n.LanguageSettings
+import top.focess.keystead.client.i18n.LocalStrings
 import top.focess.keystead.client.ui.AddSecretPanel
+import top.focess.keystead.client.ui.AccountPanel
+import top.focess.keystead.client.ui.BackupPanel
+import top.focess.keystead.client.ui.LocalLoginPanel
 import top.focess.keystead.client.ui.InspectorPanel
-import top.focess.keystead.client.ui.LifecyclePanel
+import top.focess.keystead.client.ui.PortableBackupRestorePanel
+import top.focess.keystead.client.ui.RecoveryHub
+import top.focess.keystead.client.ui.RecoveryHubPresentation
+import top.focess.keystead.client.ui.RecoveryMethod
 import top.focess.keystead.client.ui.SecretListPanel
+import top.focess.keystead.client.ui.ServerRestorePanel
+import top.focess.keystead.client.ui.ServerRecoveryHub
+import top.focess.keystead.client.ui.VaultAccessApprovalPanel
 import top.focess.keystead.client.ui.SharePanel
+import top.focess.keystead.client.ui.SettingsPanel
 import top.focess.keystead.client.ui.SyncPanel
-import top.focess.keystead.client.ui.collaborationStatus
-import top.focess.keystead.client.ui.storageStatus
 import top.focess.keystead.model.SecretType
 import top.focess.keystead.share.ShareContents
 
+private val defaultClientDirectory: Path = ClientDataDirectory.resolve()
 private val defaultVaultDirectory: String =
-    Path.of(System.getProperty("user.home"), ".keystead-client", "vault.kvault").toString()
-private val defaultClientDirectory: Path =
-    Path.of(System.getProperty("user.home"), ".keystead-client")
+    defaultClientDirectory.resolve("vault.kvault").toString()
 private const val desktopStorageInstance = "keystead-desktop"
 
 fun main() = application {
+    val appIcon =
+        remember {
+            BitmapPainter(KeysteadBrand.loadIconImage().toComposeImageBitmap())
+        }
     val windowState =
         rememberWindowState(
             width = (KeysteadWindowMetrics.WideBreakpointDp + 120).dp,
             height = 820.dp,
         )
-    Window(onCloseRequest = ::exitApplication, title = "Keystead", state = windowState) {
+    Window(
+        onCloseRequest = ::exitApplication,
+        title = "Keystead",
+        icon = appIcon,
+        state = windowState,
+    ) {
         DisposableEffect(Unit) {
+            val displayTransform = window.graphicsConfiguration.defaultTransform
             window.minimumSize =
                 Dimension(
-                    KeysteadWindowMetrics.MinimumWidthDp,
-                    KeysteadWindowMetrics.MinimumHeightDp,
+                    KeysteadWindowMetrics.minimumWidthPixels(displayTransform.scaleX),
+                    KeysteadWindowMetrics.minimumHeightPixels(displayTransform.scaleY),
                 )
             onDispose {}
         }
@@ -55,15 +83,40 @@ fun main() = application {
                 modifier = Modifier.fillMaxSize(),
                 color = androidx.compose.material3.MaterialTheme.colorScheme.background,
             ) {
-                KeysteadClientApp()
+                KeysteadClientApp(windowHandle = { WinDef.HWND(Native.getWindowPointer(window)) })
             }
         }
     }
 }
 
 @Composable
-fun KeysteadClientApp() {
-    var vaultDirectory by remember { mutableStateOf(defaultVaultDirectory) }
+fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
+    val languageSettings = remember {
+        LanguageSettings(defaultClientDirectory.resolve("language.properties"))
+    }
+    var locale by remember { mutableStateOf(languageSettings.load() ?: AppLocale.ENGLISH) }
+    val onLocaleChange: (AppLocale) -> Unit = { newLocale ->
+        locale = newLocale
+        languageSettings.save(newLocale)
+    }
+    val strings = locale.strings
+    val vaultLocationSettings =
+        remember {
+            VaultLocationSettings(
+                defaultClientDirectory.resolve("vault-location.properties"),
+                Path.of(defaultVaultDirectory),
+            )
+        }
+    var vaultDirectory by remember {
+        mutableStateOf(vaultLocationSettings.load().toString())
+    }
+    val serverConnectionSettings =
+        remember {
+            ServerConnectionSettings(
+                defaultClientDirectory.resolve("server-connection.properties"),
+                "http://localhost:8080",
+            )
+        }
     var fingerprint by remember { mutableStateOf("") }
     var masterPassword by remember { mutableStateOf("") }
     var session by remember { mutableStateOf<LocalVaultSession?>(null) }
@@ -85,6 +138,7 @@ fun KeysteadClientApp() {
     var totpSecondsRemaining by remember { mutableStateOf(0) }
     val destructiveGate = remember { ConfirmationGate<DestructiveConfirmation>() }
     var conflictAssessment by remember { mutableStateOf<ConflictAssessment?>(null) }
+    var recordInventory by remember { mutableStateOf<PersonalVaultRecordInventory?>(null) }
     var secretType by remember { mutableStateOf(SecretType.LOGIN_PASSWORD) }
     var title by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -97,24 +151,86 @@ fun KeysteadClientApp() {
     var expiry by remember { mutableStateOf("") }
     var structuredFields by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var editingSecretId by remember { mutableStateOf<String?>(null) }
-    var serverUrl by remember { mutableStateOf("http://localhost:8080") }
+    var serverUrl by remember { mutableStateOf(serverConnectionSettings.load()) }
     var serverUsername by remember { mutableStateOf("") }
     var serverPassword by remember { mutableStateOf("") }
+    var serverPasswordConfirmation by remember { mutableStateOf("") }
+    var accountAuthUiState by remember { mutableStateOf(AccountAuthUiState()) }
     var serverAuthSession by remember { mutableStateOf<ServerAuthSession?>(null) }
-    var deviceId by remember { mutableStateOf("laptop-1") }
-    var devicePassphrase by remember { mutableStateOf("") }
-    var deviceIdentity by remember { mutableStateOf<LocalDeviceIdentity?>(null) }
-    var serverDeviceState by remember { mutableStateOf<ServerDevice?>(null) }
-    var revokedDeviceId by remember { mutableStateOf<String?>(null) }
+    val vaultAccessLifecycle =
+        remember {
+            UserInitiatedAccessRequestLifecycle<
+                EphemeralVaultAccessSession,
+                ServerVaultAccessRequest,
+            >()
+        }
+    var vaultAccessExchangeSession by remember {
+        mutableStateOf<EphemeralVaultAccessSession?>(null)
+    }
+    val serverAvailabilityChecker = remember { ServerAvailabilityChecker() }
+    var serverAvailability by remember { mutableStateOf(ServerAvailability.CHECKING) }
+    var serverCheckGeneration by remember { mutableStateOf(0L) }
+    var localLoginPassphrase by remember { mutableStateOf("") }
+    var localUnlockCredential by remember { mutableStateOf<LocalUnlockCredential?>(null) }
+    var deviceKeySlots by remember { mutableStateOf<List<DeviceKeySlot>>(emptyList()) }
+    var deviceLoginAvailable by remember { mutableStateOf(false) }
     val secureStorageSettings = remember {
         SecureStorageSettings(defaultClientDirectory.resolve("secure-storage.properties"))
     }
-    val secureStorageViewModel = remember { SecureStorageViewModel(secureStorageSettings) }
+    val localUnlockStorageSettings = remember {
+        SecureStorageSettings(defaultClientDirectory.resolve("local-login-storage.properties"))
+    }
+    val secureStorageViewModel =
+        remember {
+            SecureStorageViewModel(
+                secureStorageSettings,
+                SecureStorageFactory(windowHandle = windowHandle),
+            )
+        }
+    val localUnlockStorageViewModel =
+        remember {
+            SecureStorageViewModel(
+                localUnlockStorageSettings,
+                SecureStorageFactory(windowHandle = windowHandle),
+            )
+        }
+    val localUnlockCredentialManager = remember {
+        LocalUnlockCredentialManager(
+            defaultClientDirectory.resolve("local-vault-login"),
+            localUnlockStorageViewModel::selectedStorage,
+        )
+    }
+    val localLoginEnrollmentStore = remember {
+        LocalLoginEnrollmentStore(
+            defaultClientDirectory.resolve("local-login-enrollments.properties"),
+        )
+    }
     var secureStorageModel by remember { mutableStateOf(secureStorageViewModel.model) }
-    var collaborationState by remember { mutableStateOf<CollaborationUiState>(CollaborationUiState.Loading) }
-    var recoveryKit by remember { mutableStateOf("") }
-    var replacementRequest by remember { mutableStateOf<ServerRecoveryDeviceRequest?>(null) }
-    var status by remember { mutableStateOf("Vault locked") }
+    var localUnlockStorageModel by remember {
+        mutableStateOf(localUnlockStorageViewModel.model)
+    }
+    var localUnlockDescriptor by remember {
+        mutableStateOf<LocalUnlockCredentialDescriptor?>(null)
+    }
+    var ownVaultAccessRequest by remember { mutableStateOf<ServerVaultAccessRequest?>(null) }
+    var pendingApprovalRequest by remember { mutableStateOf<ServerVaultAccessRequest?>(null) }
+    var recoveryMethod by remember { mutableStateOf(RecoveryHubPresentation.defaultMethod) }
+    var serverRecoveryTask by remember {
+        mutableStateOf(ServerRecoveryTask.RESTORE_THIS_DEVICE)
+    }
+    var backupPassword by remember { mutableStateOf("") }
+    var backupPasswordConfirmation by remember { mutableStateOf("") }
+    var backupNewMasterPassphrase by remember { mutableStateOf("") }
+    var backupNewMasterPassphraseConfirmation by remember { mutableStateOf("") }
+    var backupRestoreSelection by remember {
+        mutableStateOf(BackupRestoreSelection(source = null, target = null))
+    }
+    var pendingBackupRestore by remember { mutableStateOf<BackupRestoreSelection?>(null) }
+    var serverRestoreTarget by remember { mutableStateOf(vaultDirectory) }
+    var serverRestoreNewMasterPassphrase by remember { mutableStateOf("") }
+    var serverRestoreNewMasterPassphraseConfirmation by remember { mutableStateOf("") }
+    val actionFeedbackState = remember { ActionFeedbackState(strings.vaultLocked) }
+    var status by actionFeedbackState
     var unlockError by remember { mutableStateOf<String?>(null) }
     var currentDestination by remember {
         mutableStateOf(top.focess.keystead.client.ui.KeysteadDestination.SECRETS)
@@ -147,25 +263,66 @@ fun KeysteadClientApp() {
         editingSecretId = null
     }
 
+    fun reportUnlockError(message: String) {
+        unlockError = message
+        actionFeedbackState.error(message)
+    }
+
     DisposableEffect(session) {
         val localVaultSession = session
         onDispose { localVaultSession?.close() }
-    }
-    DisposableEffect(deviceIdentity) {
-        val localIdentity = deviceIdentity
-        onDispose { localIdentity?.close() }
     }
     DisposableEffect(serverAuthSession) {
         val authenticatedSession = serverAuthSession
         onDispose { authenticatedSession?.close() }
     }
+    DisposableEffect(vaultAccessLifecycle) {
+        onDispose { vaultAccessLifecycle.close() }
+    }
+    DisposableEffect(localUnlockCredentialManager) {
+        onDispose { localUnlockCredentialManager.close() }
+    }
     DisposableEffect(secureStorageViewModel) {
         onDispose { secureStorageViewModel.close() }
+    }
+    DisposableEffect(localUnlockStorageViewModel) {
+        onDispose { localUnlockStorageViewModel.close() }
     }
     fun serverSessionStore(): RefreshTokenStore? {
         val storage = secureStorageViewModel.selectedStorage() ?: return null
         if (storage.capability == SecureStorageCapability.MEMORY_ONLY) return null
         return RefreshTokenStore(storage)
+    }
+
+    fun clearVaultAccessState() {
+        vaultAccessLifecycle.onAccountAuthenticated()
+        vaultAccessExchangeSession = null
+        ownVaultAccessRequest = null
+        recordInventory = null
+    }
+
+    fun beginVaultAccessExchange(authenticated: ServerAuthSession): String? {
+        try {
+            val request =
+                vaultAccessLifecycle.requestByUser {
+                    val exchange = EphemeralVaultAccessSession.create(serverUrl)
+                    try {
+                        StartedAccessRequest(
+                            exchange,
+                            VaultAccessWorkflow(authenticated.client()).request(exchange),
+                        )
+                    } catch (error: Exception) {
+                        exchange.close()
+                        throw error
+                    }
+                }
+            vaultAccessExchangeSession = vaultAccessLifecycle.exchange
+            ownVaultAccessRequest = request
+            return null
+        } catch (error: Exception) {
+            clearVaultAccessState()
+            return error.message ?: error::class.simpleName ?: "Unknown error"
+        }
     }
 
     fun restoreServerSession() {
@@ -176,7 +333,6 @@ fun KeysteadClientApp() {
                 PersistedAuthSession(
                     persisted.baseUrl,
                     persisted.username,
-                    persisted.deviceId,
                     refreshToken,
                     expiresAt,
                 ),
@@ -200,26 +356,99 @@ fun KeysteadClientApp() {
             serverAuthSession = session
             serverUrl = persisted.baseUrl
             serverUsername = persisted.username
-            status = "Signed in to Keystead Server (restored)"
+            clearVaultAccessState()
+            serverAvailability = ServerAvailability.ONLINE
+            status = strings.signedInRestored
         } catch (error: KeysteadAuthenticationException) {
+            serverAvailability = ServerAvailability.ONLINE
             store.clear()
-            status = "Server session expired; sign in again"
+            actionFeedbackState.error(strings.serverSessionExpired)
         } catch (error: Exception) {
-            status = "Could not restore server session: ${error.message ?: error::class.simpleName}"
+            if (error is java.io.IOException) {
+                serverAvailability = ServerAvailability.OFFLINE
+            }
+            actionFeedbackState.error(
+                strings.couldNotRestoreServerSession(error.message ?: error::class.simpleName ?: ""),
+            )
         }
     }
 
     LaunchedEffect(Unit) {
-        val persisted = secureStorageSettings.load()
-        secureStorageModel =
-            secureStorageViewModel.checkNative(defaultClientDirectory.resolve("secure-storage"), desktopStorageInstance)
-        if (persisted?.mode == SecureStorageMode.NATIVE &&
-            secureStorageModel.state == SecureStorageUiState.NATIVE_AVAILABLE
-        ) {
-            secureStorageViewModel.selectNative()
-            secureStorageModel = secureStorageViewModel.model
+        try {
+            localUnlockStorageModel =
+                localUnlockStorageViewModel.initialize(
+                    defaultClientDirectory.resolve("local-login-secure-storage"),
+                    "$desktopStorageInstance-local-login",
+                )
+            localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+            localUnlockDescriptor?.let { descriptor ->
+                if (localUnlockStorageModel.selectedMode == null) {
+                    localUnlockStorageModel =
+                        localUnlockStorageViewModel.adoptExistingLocalLogin(
+                            descriptor.persistence,
+                        )
+                }
+            }
+        } catch (error: Exception) {
+            actionFeedbackState.error(error.message ?: strings.localLoginCredentialUnavailable)
         }
+        secureStorageModel =
+            secureStorageViewModel.initialize(
+                defaultClientDirectory.resolve("secure-storage"),
+                desktopStorageInstance,
+            )
         restoreServerSession()
+    }
+    LaunchedEffect(vaultDirectory, session, deviceKeySlots, localUnlockDescriptor) {
+        val descriptor = localUnlockDescriptor
+        if (descriptor == null) {
+            deviceLoginAvailable = false
+        } else {
+            val inspected =
+                if (session != null) {
+                    LocalVaultDeviceSlots(session!!.fingerprintValue(), deviceKeySlots)
+                } else {
+                    val selectedVault = runCatching { Path.of(vaultDirectory) }.getOrNull()
+                    if (selectedVault == null) {
+                        null
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            runCatching { LocalVaultSession.inspectDeviceSlots(selectedVault) }
+                                .getOrNull()
+                        }
+                    }
+                }
+            deviceLoginAvailable =
+                inspected?.let { value ->
+                    withContext(Dispatchers.IO) {
+                        localLoginEnrollmentStore.isEnrolled(
+                            vaultFingerprint = value.fingerprint,
+                            slotKeyIds = value.slots.mapTo(mutableSetOf(), DeviceKeySlot::slotKeyId),
+                            credentialFingerprint = descriptor.keyFingerprint,
+                        )
+                    }
+                } == true
+        }
+    }
+    LaunchedEffect(serverUrl, serverCheckGeneration) {
+        serverAvailability = ServerAvailability.CHECKING
+        delay(350)
+        val checkedUrl = serverUrl
+        if (checkedUrl.isNotBlank()) {
+            withContext(Dispatchers.IO) {
+                serverConnectionSettings.remember(checkedUrl)
+            }
+        }
+        while (true) {
+            val checked =
+                withContext(Dispatchers.IO) {
+                    serverAvailabilityChecker.check(checkedUrl)
+                }
+            if (serverUrl == checkedUrl) {
+                serverAvailability = checked
+            }
+            delay(15_000)
+        }
     }
     LaunchedEffect(revealGeneration, selectedSecretId) {
         if (revealedValue.isNotEmpty()) {
@@ -262,33 +491,127 @@ fun KeysteadClientApp() {
 
     fun refresh(current: LocalVaultSession) {
         secrets = current.listSecrets()
+        deviceKeySlots = current.deviceSlots()
         if (selectedSecretId !in secrets.map { it.id }) {
             selectedSecretId = null
             revealedValue = ""
         }
     }
 
-    fun unloadDeviceIdentity() {
-        deviceIdentity?.close()
-        deviceIdentity = null
+    fun lockVault(nextStatus: String = strings.vaultLocked) {
+        session?.close()
+        session = null
+        secrets = emptyList()
+        selectedSecretId = null
+        revealLifecycle.clear()
+        revealedValue = ""
+        clipboardLifecycle.dispose(java.time.Instant.now(), clipboardTicket)
+        clipboardTicket = null
+        clearSecretEditor()
+        masterPassword = ""
+        serverPassword = ""
+        serverPasswordConfirmation = ""
+        accountAuthUiState = accountAuthUiState.onInputChanged()
+        shareTitle = ""
+        sharePayload = ""
+        sharePassphrase = ""
+        redeemCode = ""
+        redeemPassphrase = ""
+        redeemedContents = null
+        mintedShare = null
+        outstandingShares = emptyList()
+        deviceKeySlots = emptyList()
+        backupPassword = ""
+        backupPasswordConfirmation = ""
+        backupNewMasterPassphrase = ""
+        backupNewMasterPassphraseConfirmation = ""
+        backupRestoreSelection = BackupRestoreSelection(source = null, target = null)
+        pendingBackupRestore = null
+        currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
+        inspectorSheetOpen = false
+        actionFeedbackState.info(nextStatus)
+        recordInventory = null
+        unlockError = null
     }
 
-    fun runAction(onError: ((String) -> Unit)? = null, action: () -> Unit) {
+    fun runAction(
+        onError: ((String) -> Unit)? = null,
+        serverAction: Boolean = false,
+        action: () -> Unit,
+    ) {
         try {
             action()
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(
+                        serverAvailability,
+                        error = null,
+                    )
+            }
         } catch (error: KeysteadRevisionConflictException) {
-            conflictAssessment = ConflictAssessment.from(error)
-            status = SyncStatusFormatter.messageFor(error)
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+            }
+            conflictAssessment = ConflictAssessment.from(error, strings)
+            actionFeedbackState.error(SyncStatusFormatter.messageFor(error, strings))
+        } catch (error: KeysteadAccountConflictException) {
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+            }
+            val message = strings.serverUserAlreadyExists
+            actionFeedbackState.error(message)
+            onError?.invoke(message)
         } catch (error: KeysteadAuthenticationException) {
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+            }
             serverAuthSession?.close()
             serverAuthSession = null
-            serverDeviceState = null
-            unloadDeviceIdentity()
-            status = error.message ?: "Server authentication failed"
-            onError?.invoke(status)
-        } catch (error: RuntimeException) {
-            status = error.message ?: error::class.simpleName.orEmpty()
-            onError?.invoke(status)
+            val message = strings.serverCredentialsRejected
+            actionFeedbackState.error(message)
+            onError?.invoke(message)
+        } catch (error: java.io.IOException) {
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+            }
+            val message = strings.couldNotReachServer(error::class.simpleName ?: "IOException")
+            actionFeedbackState.error(message)
+            onError?.invoke(message)
+        } catch (error: PersonalVaultMismatchException) {
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+            }
+            val message =
+                strings.personalVaultMismatch(error.serverFingerprint, error.localFingerprint)
+            actionFeedbackState.error(message)
+            onError?.invoke(message)
+            runCatching {
+                val remote = serverAuthSession?.client()?.listAllPersonalRecords() ?: return@runCatching
+                val current = session
+                recordInventory =
+                    PersonalVaultRecordInventory.compare(
+                        localRecords = current?.currentPersonalRecords(),
+                        remoteRecords = remote,
+                        localFingerprint = current?.fingerprintValue(),
+                    )
+            }
+        } catch (error: KeysteadServerException) {
+            if (serverAction) {
+                serverAvailability =
+                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+            }
+            val message = error.message ?: error::class.simpleName.orEmpty()
+            actionFeedbackState.error(message)
+            onError?.invoke(message)
+        } catch (error: Exception) {
+            val message = error.message ?: error::class.simpleName.orEmpty()
+            actionFeedbackState.error(message)
+            onError?.invoke(message)
         }
     }
 
@@ -306,131 +629,432 @@ fun KeysteadClientApp() {
             if (editingSecretId == secretId) {
                 clearSecretEditor()
             }
-            status = "Deleted secret"
+            status = strings.deletedSecret
             refresh(current)
-        }
-    }
-
-    fun performRevokeDevice() {
-        val identity = deviceIdentity ?: return
-        val authenticated = serverAuthSession ?: return
-        val knownDevice = serverDeviceState ?: return
-        try {
-            runAction {
-                val revoked =
-                    DeviceRevocationService().revoke(authenticated, identity, knownDevice)
-                serverDeviceState = null
-                revokedDeviceId = revoked.deviceId
-                status = "Device revoked"
-            }
-        } finally {
-            serverAuthSession = null
-            deviceIdentity = null
         }
     }
 
     fun serverClient(): KeysteadServerClient =
         serverAuthSession?.client()
-            ?: throw IllegalStateException("Log in to Keystead Server first")
+            ?: throw IllegalStateException(strings.serverLoginRequiredFirst)
 
-    fun loginToServer(deviceId: String?) {
+    fun loadRecordInventory() {
+        val current = session
+        recordInventory =
+            PersonalVaultRecordInventory.compare(
+                localRecords = current?.currentPersonalRecords(),
+                remoteRecords = serverClient().listAllPersonalRecords(),
+                localFingerprint = current?.fingerprintValue(),
+            )
+    }
+
+    fun performRemoveServerRecords(secretIds: Set<String>) {
+        if (secretIds.isEmpty()) return
+        runAction(serverAction = true) {
+            val removedEvents =
+                secretIds.sumOf { secretId ->
+                    serverClient().deletePersonalRecordHistory(secretId).deletedEvents
+                }
+            loadRecordInventory()
+            status = strings.removedServerRecords(secretIds.size, removedEvents)
+        }
+    }
+
+    fun authenticateServer(password: CharArray): ServerAuthSession {
+        val store = serverSessionStore()
+        val tokenSink: ((String, java.time.Instant) -> Unit)? =
+            store?.let { s ->
+                { refreshToken, expiresAt ->
+                    s.save(
+                        PersistedAuthSession(
+                            serverUrl,
+                            serverUsername,
+                            refreshToken,
+                            expiresAt,
+                        ),
+                    )
+                }
+            }
+        val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
+        return KeysteadServerAuthClient(serverUrl)
+            .login(serverUsername, password, tokenSink, onRevoked)
+    }
+
+    fun loginToServer() {
         val passwordChars = serverPassword.toCharArray()
+        accountAuthUiState = accountAuthUiState.onInputChanged()
         try {
-            runAction {
-                val store = serverSessionStore()
-                val tokenSink: ((String, java.time.Instant) -> Unit)? =
-                    store?.let { s ->
-                        { refreshToken, expiresAt ->
-                            s.save(
-                                PersistedAuthSession(
-                                    serverUrl,
-                                    serverUsername,
-                                    deviceId,
-                                    refreshToken,
-                                    expiresAt,
-                                ),
-                            )
-                        }
-                    }
-                val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
-                val authenticated =
-                    KeysteadServerAuthClient(serverUrl)
-                        .login(serverUsername, passwordChars, deviceId, tokenSink, onRevoked)
+            runAction(
+                onError = { message ->
+                    accountAuthUiState = accountAuthUiState.withFailure(message)
+                },
+                serverAction = true,
+            ) {
+                val authenticated = authenticateServer(passwordChars)
                 serverAuthSession?.close()
                 serverAuthSession = authenticated
-                status =
-                    if (deviceId == null) {
-                        "Signed in to Keystead Server"
-                    } else {
-                        "Signed in with verified device"
-                    }
+                clearVaultAccessState()
+                accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
+                status = strings.signedInToServer
             }
         } finally {
             Wipe.wipe(passwordChars)
             serverPassword = ""
+            serverPasswordConfirmation = ""
         }
     }
 
-    fun identityDirectory(): Path =
-        Path.of(vaultDirectory).parent?.resolve("device") ?: Path.of(vaultDirectory).resolve("device")
+    fun performDeleteVaultFile(vaultFile: String) {
+        val target =
+            runCatching { Path.of(vaultFile).toAbsolutePath().normalize() }
+                .getOrElse {
+                    actionFeedbackState.error(
+                        strings.vaultFileDeleteFailed(
+                            it.message ?: it::class.simpleName.orEmpty(),
+                        ),
+                    )
+                    return
+                }
+        val current =
+            runCatching { Path.of(vaultDirectory).toAbsolutePath().normalize() }
+                .getOrNull()
+        if (session == null || current != target) return
 
-    fun syncStateStore(): SyncStateStore =
+        lockVault()
+        try {
+            val deleted = VaultFileDeletionService().delete(target)
+            runCatching { vaultLocationSettings.clear() }
+            vaultDirectory = defaultVaultDirectory
+            status = strings.vaultFileDeleted(deleted.fileName.toString())
+        } catch (error: Exception) {
+            actionFeedbackState.error(
+                strings.vaultFileDeleteFailed(
+                    error.message ?: error::class.simpleName.orEmpty(),
+                ),
+            )
+        }
+    }
+
+    fun enableDeviceLoginIfReady(): Boolean {
+        val current = session ?: return false
+        val credential = localUnlockCredential ?: return false
+        val descriptor = localUnlockDescriptor ?: return false
+        if (!localUnlockCredentialManager.canEnrollVaultKey) return false
+        val vaultFingerprint = current.fingerprintValue()
+        val currentSlots = current.deviceSlots()
+        if (
+            localLoginEnrollmentStore.isEnrolled(
+                vaultFingerprint,
+                currentSlots.mapTo(mutableSetOf(), DeviceKeySlot::slotKeyId),
+                descriptor.keyFingerprint,
+            )
+        ) {
+            deviceKeySlots = currentSlots
+            deviceLoginAvailable = true
+            return false
+        }
+        val localSlot = current.replaceLocalLogin(credential)
+        localLoginEnrollmentStore.remember(
+            vaultFingerprint = vaultFingerprint,
+            slotKeyId = localSlot,
+            credentialFingerprint = descriptor.keyFingerprint,
+        )
+        deviceKeySlots = current.deviceSlots()
+        deviceLoginAvailable = true
+        return true
+    }
+
+    fun performRemoveDeviceLogin() {
+        val current = session ?: return
+        runAction {
+            val vaultFingerprint = current.fingerprintValue()
+            current.removeDeviceLogin()
+            localLoginEnrollmentStore.clear(vaultFingerprint)
+            deviceKeySlots = current.deviceSlots()
+            deviceLoginAvailable = false
+            status = strings.deviceLoginRemoved
+        }
+    }
+
+    fun loadLocalUnlockCredential(onError: ((String) -> Unit)? = null) {
+        val passphraseChars = localLoginPassphrase.toCharArray()
+        try {
+            runAction(onError = onError) {
+                val descriptor =
+                    localUnlockCredentialManager.descriptor()
+                        ?: throw IllegalStateException(strings.deviceLoginNotConfigured)
+                if (localUnlockStorageModel.selectedMode == null) {
+                    localUnlockStorageModel =
+                        localUnlockStorageViewModel.adoptExistingLocalLogin(
+                            descriptor.persistence,
+                        )
+                }
+                localUnlockCredential =
+                    localUnlockCredentialManager.loadExisting(passphraseChars)
+                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+                status =
+                    if (enableDeviceLoginIfReady()) {
+                        strings.deviceLoginEnabled
+                    } else {
+                        strings.localLoginReadyStatus
+                    }
+            }
+        } finally {
+            Wipe.wipe(passphraseChars)
+            localLoginPassphrase = ""
+        }
+    }
+
+    fun createBiometricLocalLogin() {
+        val emptyPassphrase = charArrayOf()
+        try {
+            runAction {
+                check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
+                localUnlockStorageViewModel.selectBiometric()
+                localUnlockStorageModel = localUnlockStorageViewModel.model
+                localUnlockCredential =
+                    localUnlockCredentialManager.loadOrCreate(
+                        SecureStorageMode.BIOMETRIC,
+                        emptyPassphrase,
+                    )
+                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+                status =
+                    if (enableDeviceLoginIfReady()) {
+                        strings.deviceLoginEnabled
+                    } else {
+                        strings.localLoginReadyStatus
+                    }
+            }
+        } finally {
+            Wipe.wipe(emptyPassphrase)
+        }
+    }
+
+    fun createPassphraseLocalLogin() {
+        val passphraseChars = localLoginPassphrase.toCharArray()
+        try {
+            runAction {
+                check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
+                localUnlockStorageModel = localUnlockStorageViewModel.selectPassphrase()
+                localUnlockCredential =
+                    localUnlockCredentialManager.loadOrCreate(
+                        SecureStorageMode.PASSPHRASE_FILE,
+                        passphraseChars,
+                    )
+                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+                status =
+                    if (enableDeviceLoginIfReady()) {
+                        strings.deviceLoginEnabled
+                    } else {
+                        strings.localLoginReadyStatus
+                    }
+            }
+        } finally {
+            Wipe.wipe(passphraseChars)
+            localLoginPassphrase = ""
+        }
+    }
+
+    fun syncStateStore(vaultFile: Path = Path.of(vaultDirectory)): SyncStateStore =
         SyncStateStore(
-            Path.of(vaultDirectory).parent?.resolve("sync")
-                ?: Path.of(vaultDirectory).resolve("sync"),
+            vaultFile.parent?.resolve("sync")
+                ?: vaultFile.resolve("sync"),
         )
 
     fun performPullAndRetry() {
         val current = session ?: return
-        runAction {
+        runAction(serverAction = true) {
             val state = syncStateStore()
-            val pulled = current.pullPendingRecordsFrom(serverClient(), state)
-            val pushed = current.pushPendingRecordsTo(serverClient(), state)
+            val pulled = current.pullPendingPersonalRecordsFrom(serverClient(), state)
+            val pushed = current.pushPendingPersonalRecordsTo(serverClient(), state)
             conflictAssessment = null
-            status = "Pulled $pulled and re-pushed $pushed records"
+            status = strings.pulledAndRepushed(pulled.imported, pushed)
+            if (pulled.rejected.isNotEmpty()) {
+                actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
+            }
             refresh(current)
         }
+    }
+
+    fun chooseExistingVaultFile() {
+        val current = runCatching { Path.of(vaultDirectory).toAbsolutePath().normalize() }.getOrNull()
+        val owner: java.awt.Frame? = null
+        val dialog =
+            java.awt.FileDialog(
+                owner,
+                strings.chooseExistingVaultDialogTitle,
+                java.awt.FileDialog.LOAD,
+            )
+        dialog.directory = current?.parent?.toString()
+        dialog.file = "*.kvault"
+        dialog.filenameFilter = java.io.FilenameFilter { _, name ->
+            name.endsWith(".kvault", ignoreCase = true)
+        }
+        dialog.isVisible = true
+        val selectedName = dialog.file ?: return
+        vaultDirectory =
+            java.io.File(dialog.directory, selectedName)
+                .toPath()
+                .toAbsolutePath()
+                .normalize()
+                .toString()
+        unlockError = null
+    }
+
+    fun chooseNewVaultFile() {
+        val current = runCatching { Path.of(vaultDirectory).toAbsolutePath().normalize() }.getOrNull()
+        val owner: java.awt.Frame? = null
+        val dialog =
+            java.awt.FileDialog(
+                owner,
+                strings.chooseNewVaultDialogTitle,
+                java.awt.FileDialog.SAVE,
+            )
+        dialog.directory = current?.parent?.toString()
+        dialog.file = current?.fileName?.toString() ?: "vault.kvault"
+        dialog.isVisible = true
+        val selectedName = dialog.file ?: return
+        vaultDirectory =
+            VaultFileSelection
+                .newTarget(java.io.File(dialog.directory, selectedName).toPath())
+                .toAbsolutePath()
+                .normalize()
+                .toString()
+        unlockError = null
     }
 
     fun performExportBackup() {
         val current = session ?: return
         val owner: java.awt.Frame? = null
-        val dialog = java.awt.FileDialog(owner, "Export Keystead backup", java.awt.FileDialog.SAVE)
-        dialog.file = "keystead-backup.json"
+        val dialog = java.awt.FileDialog(owner, strings.exportBackupDialogTitle, java.awt.FileDialog.SAVE)
+        dialog.file = "keystead-backup.ksbackup"
         dialog.isVisible = true
         val fileName = dialog.file ?: return
-        val target = java.io.File(dialog.directory, fileName)
+        val selected = java.io.File(dialog.directory, fileName)
+        val target =
+            if (selected.name.endsWith(".ksbackup", ignoreCase = true)) {
+                selected
+            } else {
+                java.io.File(selected.parentFile, selected.name + ".ksbackup")
+            }
         runAction {
             java.io.FileOutputStream(target).use { output ->
-                VaultBackup.export(current, output)
+                VaultBackup.export(current, backupPassword.toCharArray(), output)
             }
-            status = "Exported backup to ${target.name}"
+            backupPassword = ""
+            backupPasswordConfirmation = ""
+            status = strings.exportedBackupTo(target.name)
         }
     }
 
-    fun performRestoreBackup() {
-        val current = session ?: return
+    fun chooseBackupSource() {
         val owner: java.awt.Frame? = null
-        val dialog = java.awt.FileDialog(owner, "Restore Keystead backup", java.awt.FileDialog.LOAD)
-        dialog.file = "keystead-backup.json"
-        dialog.isVisible = true
-        val fileName = dialog.file ?: return
-        val source = java.io.File(dialog.directory, fileName)
-        runAction {
-            val report =
-                java.io.FileInputStream(source).use { input ->
-                    VaultBackup.restore(current, input)
-                }
-            status = BackupReportFormatter.summarize(report)
-            refresh(current)
-        }
+        val sourceDialog =
+            java.awt.FileDialog(owner, strings.restoreBackupDialogTitle, java.awt.FileDialog.LOAD)
+        sourceDialog.file = "*.ksbackup"
+        sourceDialog.isVisible = true
+        val sourceName = sourceDialog.file ?: return
+        backupRestoreSelection =
+            backupRestoreSelection.copy(
+                source = java.io.File(sourceDialog.directory, sourceName).toPath(),
+            )
     }
 
-    fun rotationStateStore(): VaultRotationStateStore =
-        VaultRotationStateStore(
-            (Path.of(vaultDirectory).parent ?: Path.of(vaultDirectory))
-                .resolve("rotation-$fingerprint.properties"),
-        )
+    fun chooseBackupRestoreTarget() {
+        val source = backupRestoreSelection.source
+        val baseName =
+            if (source?.fileName?.toString()?.endsWith(".ksbackup", ignoreCase = true) == true) {
+                source.fileName.toString().dropLast(".ksbackup".length)
+            } else {
+                "restored"
+            }
+        val owner: java.awt.Frame? = null
+        val targetDialog =
+            java.awt.FileDialog(owner, strings.restoreTargetDialogTitle, java.awt.FileDialog.SAVE)
+        targetDialog.directory = source?.parent?.toString()
+        targetDialog.file = "${baseName.ifBlank { "restored" }}-restored.kvault"
+        targetDialog.isVisible = true
+        val targetName = targetDialog.file ?: return
+        val selectedTarget = java.io.File(targetDialog.directory, targetName)
+        val target =
+            if (selectedTarget.name.endsWith(".kvault", ignoreCase = true)) {
+                selectedTarget
+            } else {
+                java.io.File(selectedTarget.parentFile, selectedTarget.name + ".kvault")
+            }
+        backupRestoreSelection = backupRestoreSelection.copy(target = target.toPath())
+    }
+
+    fun chooseServerRestoreTarget() {
+        val current = runCatching { Path.of(serverRestoreTarget) }.getOrNull()
+        val owner: java.awt.Frame? = null
+        val dialog =
+            java.awt.FileDialog(owner, strings.restoreTargetDialogTitle, java.awt.FileDialog.SAVE)
+        dialog.directory = current?.parent?.toString()
+        dialog.file = current?.fileName?.toString() ?: "keystead-restored.kvault"
+        dialog.isVisible = true
+        val selectedName = dialog.file ?: return
+        val selected = java.io.File(dialog.directory, selectedName)
+        val target =
+            if (selected.name.endsWith(".kvault", ignoreCase = true)) {
+                selected
+            } else {
+                java.io.File(selected.parentFile, selected.name + ".kvault")
+            }
+        serverRestoreTarget = target.toPath().toString()
+    }
+
+    fun performRestoreBackup(selection: BackupRestoreSelection) {
+        if (!selection.sourceReady) {
+            actionFeedbackState.error(strings.backupSourceInvalid)
+            return
+        }
+        if (!selection.targetReady) {
+            actionFeedbackState.error(strings.restoreTargetMustBeNew)
+            return
+        }
+        val source = selection.source ?: return
+        val target = selection.target ?: return
+        runAction {
+            val restored =
+                Files.newInputStream(source).use { input ->
+                    VaultBackup.restore(
+                        target,
+                        input,
+                        backupPassword.toCharArray(),
+                        backupNewMasterPassphrase.toCharArray(),
+                    )
+                }
+            var adopted = false
+            try {
+                val remembered = vaultLocationSettings.rememberSuccessfulVault(target)
+                session?.close()
+                session = restored
+                adopted = true
+                vaultDirectory = remembered.toString()
+                fingerprint = restored.fingerprintValue()
+                selectedSecretId = null
+                revealLifecycle.clear()
+                revealedValue = ""
+                clearSecretEditor()
+                refresh(restored)
+                enableDeviceLoginIfReady()
+                backupPassword = ""
+                backupPasswordConfirmation = ""
+                backupNewMasterPassphrase = ""
+                backupNewMasterPassphraseConfirmation = ""
+                backupRestoreSelection = BackupRestoreSelection(source = null, target = null)
+                pendingBackupRestore = null
+                currentDestination =
+                    top.focess.keystead.client.ui.KeysteadDestination.SECRETS
+                status = strings.restoredBackupTo(target.fileName.toString())
+            } finally {
+                if (!adopted) {
+                    restored.close()
+                }
+            }
+        }
+    }
 
     val secretListQuery =
         SecretListQuery(
@@ -467,7 +1091,7 @@ fun KeysteadClientApp() {
             onGeneratePassword = {
                 runAction {
                     password = PasswordDraftGenerator.generate()
-                    status = "Generated password"
+                    status = strings.generatedPassword
                 }
             },
             url = url,
@@ -497,7 +1121,7 @@ fun KeysteadClientApp() {
                     val draft = ApiTokenDraftGenerator.generate(prefix)
                     draft.software?.let { software = it }
                     structuredFields = structuredFields + draft.fields
-                    status = "Generated API token"
+                    status = strings.generatedApiToken
                 }
             },
             onGenerateSshKey = {
@@ -505,7 +1129,7 @@ fun KeysteadClientApp() {
                     val draft = SshKeyDraftGenerator.generate(account.ifBlank { title.ifBlank { null } })
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
-                    status = "Generated SSH key"
+                    status = strings.generatedSshKey
                 }
             },
             onGenerateGpgKey = {
@@ -520,7 +1144,7 @@ fun KeysteadClientApp() {
                         )
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
-                    status = "Generated GPG key"
+                    status = strings.generatedGpgKey
                 }
             },
             onGenerateCertificate = {
@@ -531,7 +1155,7 @@ fun KeysteadClientApp() {
                         )
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
-                    status = "Generated certificate"
+                    status = strings.generatedCertificate
                 }
             },
             onGenerateMfaSecret = {
@@ -543,10 +1167,13 @@ fun KeysteadClientApp() {
                         )
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
-                    status = "Generated MFA secret"
+                    status = strings.generatedMfaSecret
                 }
             },
-            onCancel = { clearSecretEditor() },
+            onCancel = {
+                clearSecretEditor()
+                currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
+            },
             onSave = {
                 val current = session ?: return@AddSecretPanel
                 runAction {
@@ -578,7 +1205,7 @@ fun KeysteadClientApp() {
                                 expiry = expiry.ifBlank { null },
                             )
                         }
-                        status = "Updated secret"
+                        status = strings.updatedSecret
                     } else {
                         if (secretType == SecretType.LOGIN_PASSWORD) {
                             current.addLogin(
@@ -605,106 +1232,126 @@ fun KeysteadClientApp() {
                                 expiry = expiry.ifBlank { null },
                             )
                         }
-                        status = "Saved secret"
+                        status = strings.savedSecret
                     }
                     clearSecretEditor()
                     revealedValue = ""
                     refresh(current)
+                    currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
                 }
             },
             editing = editingSecretId != null,
         )
     }
-    val syncPanel: @Composable () -> Unit = {
-        SyncPanel(
-            vaultOpen = session != null,
+    val accountPanel: @Composable () -> Unit = {
+        AccountPanel(
             authenticated = serverAuthSession != null,
+            serverAvailability = serverAvailability,
+            onCheckServer = { serverCheckGeneration += 1 },
             serverUrl = serverUrl,
             onServerUrlChange = {
                 if (it != serverUrl) {
-                    serverDeviceState = null
-                    revokedDeviceId = null
+                    serverSessionStore()?.clear()
+                    serverAuthSession?.close()
+                    serverAuthSession = null
+                    clearVaultAccessState()
+                    pendingApprovalRequest = null
                 }
                 serverUrl = it
+                accountAuthUiState = accountAuthUiState.onInputChanged()
             },
             username = serverUsername,
             onUsernameChange = {
                 if (it != serverUsername) {
-                    serverDeviceState = null
-                    revokedDeviceId = null
+                    serverSessionStore()?.clear()
+                    serverAuthSession?.close()
+                    serverAuthSession = null
+                    clearVaultAccessState()
+                    pendingApprovalRequest = null
                 }
                 serverUsername = it
+                accountAuthUiState = accountAuthUiState.onInputChanged()
             },
             password = serverPassword,
-            onPasswordChange = { serverPassword = it },
-            deviceId = deviceId,
-            onDeviceIdChange = {
-                if (it != deviceId) {
-                    deviceIdentity?.close()
-                    deviceIdentity = null
-                    serverDeviceState = null
-                    revokedDeviceId = null
-                }
-                deviceId = it
+            onPasswordChange = {
+                serverPassword = it
+                accountAuthUiState = accountAuthUiState.onInputChanged()
             },
-            devicePassphrase = devicePassphrase,
-            onDevicePassphraseChange = { devicePassphrase = it },
-            devicePassphraseRequired =
-                secureStorageSettings.load()?.mode != SecureStorageMode.NATIVE &&
-                    secureStorageSettings.load()?.mode != SecureStorageMode.MEMORY_ONLY,
-            identityLoaded = deviceIdentity != null,
-            identityName = deviceIdentity?.deviceId.orEmpty(),
-            deviceRegistered = serverDeviceState != null,
-            deviceTrustLabel =
-                when {
-                    revokedDeviceId == deviceId || serverDeviceState?.revokedAt != null -> "revoked"
-                    serverDeviceState?.verifiedAt != null -> "verified"
-                    serverDeviceState != null -> "registered, proof pending"
-                    else -> "not enrolled"
-                },
+            passwordConfirmation = serverPasswordConfirmation,
+            onPasswordConfirmationChange = {
+                serverPasswordConfirmation = it
+                accountAuthUiState = accountAuthUiState.onInputChanged()
+            },
+            authState = accountAuthUiState,
+            onAuthModeChange = { mode ->
+                accountAuthUiState = accountAuthUiState.select(mode)
+                serverPassword = ""
+                serverPasswordConfirmation = ""
+            },
             onLogin = {
-                loginToServer(null)
-            },
-            onDeviceLogin = {
-                val identity = deviceIdentity ?: return@SyncPanel
-                loginToServer(identity.deviceId)
+                loginToServer()
             },
             onRefresh = {
-                val authenticated = serverAuthSession ?: return@SyncPanel
-                runAction {
+                val authenticated = serverAuthSession ?: return@AccountPanel
+                runAction(serverAction = true) {
                     authenticated.refresh()
-                    status = "Server session refreshed"
+                    status = strings.serverSessionRefreshed
                 }
             },
             onLogout = {
-                val authenticated = serverAuthSession ?: return@SyncPanel
+                val authenticated = serverAuthSession ?: return@AccountPanel
                 try {
-                    runAction {
+                    runAction(serverAction = true) {
                         authenticated.revoke()
-                        status = "Signed out of Keystead Server"
+                        status = strings.signedOutOfServer
                     }
                 } finally {
+                    serverSessionStore()?.clear()
                     serverAuthSession = null
-                    unloadDeviceIdentity()
+                    clearVaultAccessState()
+                    pendingApprovalRequest = null
+                    accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
                 }
             },
             onLogoutAll = {
-                val authenticated = serverAuthSession ?: return@SyncPanel
+                val authenticated = serverAuthSession ?: return@AccountPanel
                 try {
-                    runAction {
+                    runAction(serverAction = true) {
                         authenticated.logoutAll()
-                        status = "Signed out on every device"
+                        status = strings.signedOutEverywhere
                     }
                 } finally {
+                    serverSessionStore()?.clear()
                     serverAuthSession = null
-                    unloadDeviceIdentity()
+                    clearVaultAccessState()
+                    pendingApprovalRequest = null
+                    accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
                 }
             },
-            onRegisterUser = {
+            onCreateAccount = {
+                if (
+                    !AccountAuthPresentation.canSubmit(
+                        mode = AccountAuthMode.CREATE_ACCOUNT,
+                        serverUrl = serverUrl,
+                        username = serverUsername,
+                        password = serverPassword,
+                        passwordConfirmation = serverPasswordConfirmation,
+                        serverAvailable = serverAvailability.isOnline,
+                        authenticated = serverAuthSession != null,
+                    )
+                ) {
+                    return@AccountPanel
+                }
                 val registrationPassword = serverPassword.toCharArray()
                 val loginPassword = serverPassword.toCharArray()
+                accountAuthUiState = accountAuthUiState.onInputChanged()
                 try {
-                    runAction {
+                    runAction(
+                        onError = { message ->
+                            accountAuthUiState = accountAuthUiState.withFailure(message)
+                        },
+                        serverAction = true,
+                    ) {
                         val authClient = KeysteadServerAuthClient(serverUrl)
                         authClient.registerUser(serverUsername, registrationPassword)
                         val store = serverSessionStore()
@@ -715,7 +1362,6 @@ fun KeysteadClientApp() {
                                         PersistedAuthSession(
                                             serverUrl,
                                             serverUsername,
-                                            null,
                                             refreshToken,
                                             expiresAt,
                                         ),
@@ -724,345 +1370,165 @@ fun KeysteadClientApp() {
                             }
                         val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
                         val authenticated =
-                            authClient.login(serverUsername, loginPassword, null, tokenSink, onRevoked)
+                            authClient.login(serverUsername, loginPassword, tokenSink, onRevoked)
                         serverAuthSession?.close()
                         serverAuthSession = authenticated
-                        serverDeviceState = null
-                        revokedDeviceId = null
-                        status = "Server user created and signed in"
+                        clearVaultAccessState()
+                        accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
+                        status = strings.serverUserCreatedAndSignedIn
                     }
                 } finally {
                     Wipe.wipe(registrationPassword)
                     Wipe.wipe(loginPassword)
                     serverPassword = ""
+                    serverPasswordConfirmation = ""
                 }
             },
-            onCreateServerVault = {
-                session ?: return@SyncPanel
-                runAction {
-                    serverClient().putVault(
-                        fingerprint,
-                        ServerVaultMetadata.opaque(fingerprint),
-                    )
-                    status = "Server vault ready"
-                }
-            },
-            onListServerVaults = {
-                runAction {
-                    val vaults = serverClient().listVaults()
-                    status =
-                        if (vaults.isEmpty()) {
-                            "No server vaults"
-                        } else {
-                            "Server vaults: ${vaults.joinToString { it.fingerprint }}"
-                        }
-                }
-            },
-            onLoadIdentity = {
-                val passphraseChars = devicePassphrase.toCharArray()
-                try {
-                    runAction {
-                        val loaded = when (secureStorageSettings.load()?.mode) {
-                            SecureStorageMode.NATIVE -> {
-                                val storage = secureStorageViewModel.selectedStorage()
-                                    ?: throw IllegalStateException("OS secure storage is not available")
-                                DeviceIdentityStore(
-                                    identityDirectory(),
-                                    secureStorage = storage,
-                                ).createOrLoadNative(deviceId)
-                            }
-                            SecureStorageMode.MEMORY_ONLY ->
-                                DeviceIdentityStore(identityDirectory()).createMemoryOnly(deviceId)
-                            SecureStorageMode.PASSPHRASE_FILE, null ->
-                                DeviceIdentityStore(identityDirectory())
-                                    .createOrLoad(deviceId, passphraseChars)
-                        }
-                        deviceIdentity?.close()
-                        deviceIdentity = loaded
-                        serverDeviceState = null
-                        status = "Device identity ready"
-                    }
-                } finally {
-                    Wipe.wipe(passphraseChars)
-                    devicePassphrase = ""
-                }
-            },
-            onUnloadIdentity = {
-                unloadDeviceIdentity()
-                status = "Device identity locked"
-            },
-            onEnrollDevice = {
-                val identity = deviceIdentity ?: return@SyncPanel
-                runAction {
-                    val client = serverClient()
-                    val enrolled = DeviceEnrollmentService().enroll(client, identity)
-                    serverDeviceState = enrolled
-                    revokedDeviceId = null
-                    val current = session
-                    if (current == null) {
-                        status = "Device verified"
-                    } else {
-                        current.publishVaultKeyPackage(client, identity, enrolled)
-                        status = "Device verified and vault key package published"
-                    }
-                }
-            },
-            onRevokeDevice = {
-                if (deviceIdentity == null || serverAuthSession == null || serverDeviceState == null) {
-                    return@SyncPanel
-                }
-                destructiveGate.request(DestructiveConfirmation.RevokeDevice)
-            },
-            onPublishKeyPackage = {
+        )
+    }
+    val syncPanel: @Composable () -> Unit = {
+        SyncPanel(
+            vaultOpen = session != null,
+            authenticated = serverAuthSession != null,
+            serverAvailability = serverAvailability,
+            onCheckServer = { serverCheckGeneration += 1 },
+            onUploadSelected = { secretIds ->
                 val current = session ?: return@SyncPanel
-                runAction {
-                    val published = current.publishVaultKeyPackagesForRegisteredDevices(serverClient())
-                    status = "Published $published vault key packages"
-                }
-            },
-            onPush = {
-                val current = session ?: return@SyncPanel
-                runAction {
-                    val state = syncStateStore()
-                    val pushed = current.pushPendingRecordsTo(serverClient(), state)
+                runAction(serverAction = true) {
+                    val pushed =
+                        current.pushSelectedPersonalRecordsTo(serverClient(), secretIds)
                     conflictAssessment = null
-                    status =
-                        "Pushed $pushed records; cursor ${state.lastPushedRevision(fingerprint)}"
+                    loadRecordInventory()
+                    status = strings.uploadedSelectedRecords(pushed)
+                }
+            },
+            onRequestRemoveSelected = { secretIds ->
+                if (secretIds.isNotEmpty()) {
+                    destructiveGate.request(
+                        DestructiveConfirmation.RemoveServerRecords(secretIds),
+                    )
                 }
             },
             onPull = {
                 val current = session ?: return@SyncPanel
-                runAction {
+                runAction(serverAction = true) {
                     val state = syncStateStore()
-                    val pulled = current.pullPendingRecordsFrom(serverClient(), state)
+                    val pulled = current.pullPendingPersonalRecordsFrom(serverClient(), state)
                     conflictAssessment = null
+                    loadRecordInventory()
                     status =
-                        "Pulled $pulled records; cursor ${state.lastPulledRevision(fingerprint)}"
+                        strings.pulledRecords(
+                            pulled.imported,
+                            state.lastPulledServerSequence(fingerprint).toString(),
+                        )
+                    if (pulled.rejected.isNotEmpty()) {
+                        actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
+                    }
                     refresh(current)
+                    loadRecordInventory()
                 }
             },
-            onOpenProvisioned = {
-                val identity = deviceIdentity ?: return@SyncPanel
-                runAction {
-                    val opened =
-                        LocalVaultSession.openFirstProvisionedFromServer(
-                            Path.of(vaultDirectory),
-                            identity,
-                            serverClient(),
-                        )
-                    session?.close()
-                    session = opened
-                    fingerprint = opened.fingerprintValue()
-                    status = "Provisioned vault open"
-                    refresh(opened)
+            onRefreshRecords = {
+                runAction(serverAction = true) {
+                    loadRecordInventory()
+                    status = strings.refreshRecordInventory
                 }
             },
             conflictAssessment = conflictAssessment,
+            recordInventory = recordInventory,
+            localRecordTitles = secrets.associate { it.id to it.title },
             onPullAndRetry = { performPullAndRetry() },
             onDismissConflict = {
                 conflictAssessment = null
-                status = "Conflict dismissed"
+                status = strings.conflictDismissed
             },
-            onExportBackup = { performExportBackup() },
-            onRestoreBackup = { performRestoreBackup() },
-            )
+        )
     }
-    val protectionPanel: @Composable () -> Unit = {
-        LifecyclePanel(
-                authenticated = serverAuthSession != null,
+    val backupPanel: @Composable () -> Unit = {
+        BackupPanel(
+            vaultOpen = session != null,
+            backupPassword = backupPassword,
+            onBackupPasswordChange = { backupPassword = it },
+            backupPasswordConfirmation = backupPasswordConfirmation,
+            onBackupPasswordConfirmationChange = { backupPasswordConfirmation = it },
+            onExportBackup = { performExportBackup() },
+        )
+    }
+    val portableBackupRestorePanel: @Composable () -> Unit = {
+        PortableBackupRestorePanel(
+            backupPassword = backupPassword,
+            onBackupPasswordChange = { backupPassword = it },
+            backupPasswordConfirmation = backupPasswordConfirmation,
+            onBackupPasswordConfirmationChange = { backupPasswordConfirmation = it },
+            newMasterPassphrase = backupNewMasterPassphrase,
+            onNewMasterPassphraseChange = { backupNewMasterPassphrase = it },
+            newMasterPassphraseConfirmation = backupNewMasterPassphraseConfirmation,
+            onNewMasterPassphraseConfirmationChange = {
+                backupNewMasterPassphraseConfirmation = it
+            },
+            restoreSelection = backupRestoreSelection,
+            onChooseBackupSource = { chooseBackupSource() },
+            onChooseRestoreTarget = { chooseBackupRestoreTarget() },
+            onReviewRestore = {
+                if (backupRestoreSelection.canReview) {
+                    pendingBackupRestore = backupRestoreSelection
+                }
+            },
+        )
+    }
+    val deviceAccessPanel: @Composable () -> Unit = {
+        val localPersistence =
+            localUnlockCredentialManager.currentPersistence
+                ?: localUnlockDescriptor?.persistence
+        val localPresentation =
+            DeviceAccessPresentation.derive(
+                secureStorage = localUnlockStorageModel,
+                credentialPersistence = localPersistence,
+                credentialLoaded = localUnlockCredential != null,
+            )
+        val localLoginPresentation =
+            DeviceLoginPresentation.derive(
                 vaultOpen = session != null,
-                identityLoaded = deviceIdentity != null,
-                secureStorage = secureStorageModel,
-                collaboration = collaborationState,
-                recoveryKit = recoveryKit,
-                replacementRequest = replacementRequest,
-                onCheckNativeStorage = {
-                    runAction {
-                        secureStorageModel = secureStorageViewModel.checkNative(
-                            defaultClientDirectory.resolve("secure-storage"),
-                            desktopStorageInstance,
-                        )
-                        status = storageStatus(secureStorageModel)
-                    }
-                },
-                onSelectNativeStorage = {
-                    runAction {
-                        secureStorageViewModel.selectNative()
-                        secureStorageModel = secureStorageViewModel.model
-                        status = "OS-user-protected storage selected"
-                    }
-                },
-                onSelectPassphraseStorage = {
-                    secureStorageModel = secureStorageViewModel.selectPassphrase()
-                    status = "Passphrase-protected device storage selected"
-                },
-                onSelectMemoryStorage = {
-                    secureStorageModel = secureStorageViewModel.selectMemory()
-                    status = "Memory-only device identity selected; it will not survive restart"
-                },
-                onMigrateIdentity = {
-                    val passphraseChars = devicePassphrase.toCharArray()
-                    try {
-                        runAction {
-                            unloadDeviceIdentity()
-                            secureStorageViewModel.migrateIdentity { storage ->
-                                DeviceIdentityStore(
-                                    identityDirectory(),
-                                    secureStorage = storage,
-                                ).migrateToNative(deviceId, passphraseChars)
-                            }
-                            secureStorageModel = secureStorageViewModel.model
-                            deviceIdentity = DeviceIdentityStore(
-                                identityDirectory(),
-                                secureStorage = secureStorageViewModel.selectedStorage(),
-                            ).createOrLoadNative(deviceId)
-                            status = "Device identity moved to OS-user-protected storage"
-                        }
-                    } finally {
-                        Wipe.wipe(passphraseChars)
-                        devicePassphrase = ""
-                    }
-                },
-                onRefreshCollaboration = {
-                    runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
-                        status = collaborationStatus(collaborationState)
-                    }
-                },
-                onAcceptInvitation = {
-                    runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).accept(fingerprint)
-                        status = collaborationStatus(collaborationState)
-                    }
-                },
-                onDeclineInvitation = {
-                    runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).decline(fingerprint)
-                        status = collaborationStatus(collaborationState)
-                    }
-                },
-                onInviteMember = { member, role ->
-                    runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).invite(fingerprint, member, role)
-                        status = collaborationStatus(collaborationState)
-                    }
-                },
-                onChangeMemberRole = { member, role ->
-                    runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).changeRole(fingerprint, member, role)
-                        status = collaborationStatus(collaborationState)
-                    }
-                },
-                onRemoveMember = { member ->
-                    runAction {
-                        collaborationState = CollaborationViewModel(serverClient()).remove(fingerprint, member)
-                        status = "Member removed; rotate the vault key before resuming writes"
-                    }
-                },
-                onPublishCollaborationPackages = {
-                    val current = session ?: return@LifecyclePanel
-                    runAction {
-                        val count = CollaborativeVaultService(serverClient())
-                            .publishUncoveredRecipientPackages(current)
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
-                        status = "Published $count missing member device packages"
-                    }
-                },
-                onRotateVault = {
-                    val current = session ?: return@LifecyclePanel
-                    val identity = deviceIdentity ?: return@LifecyclePanel
-                    runAction {
-                        val membership = VaultRotationClient(serverClient()).listMemberships()
-                            .firstOrNull { it.fingerprint == current.fingerprintValue() }
-                            ?: throw IllegalStateException("Vault membership was not found")
-                        collaborationState = CollaborationUiState.Rotating(
-                            current.fingerprintValue(), 0, 0, false,
-                            membership.keyLifecycleState == ServerVaultKeyLifecycleState.ROTATION_REQUIRED,
-                        )
-                        val rotated = VaultRotationWorkflow(serverClient(), rotationStateStore())
-                            .rotate(current, identity, membership.lifecycleVersion)
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
-                        status = "Vault key rotation ${rotated.state.name.lowercase()}"
-                    }
-                },
-                onResumeRotation = {
-                    val current = session ?: return@LifecyclePanel
-                    val identity = deviceIdentity ?: return@LifecyclePanel
-                    runAction {
-                        val rotated = VaultRotationWorkflow(serverClient(), rotationStateStore())
-                            .resume(current, identity)
-                        collaborationState = CollaborationViewModel(serverClient()).refresh(fingerprint)
-                        status = "Vault key rotation ${rotated.state.name.lowercase()}"
-                    }
-                },
-                onEnrollRecoveryKit = {
-                    val current = session ?: return@LifecyclePanel
-                    runAction {
-                        val result = RecoveryEnrollmentWorkflow(serverClient()).enroll(
-                            serverUsername,
-                            current,
-                            java.time.Instant.now().toEpochMilli(),
-                        )
-                        recoveryKit = result.recoveryKit
-                        status = "Recovery kit created; store the one-time kit offline"
-                    }
-                },
-                onCopyRecoveryKit = {
-                    recoveryKit.takeIf(String::isNotBlank)?.let {
-                        clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
-                        status = "Recovery kit copied temporarily"
-                    }
-                },
-                onOfflineRecover = { encodedKit, replacementPassword ->
-                    val identity = deviceIdentity ?: return@LifecyclePanel
-                    val passwordChars = replacementPassword.toCharArray()
-                    runAction {
-                        session?.close()
-                        session = null
-                        val recoveryRoot = defaultClientDirectory.resolve("recovered-vaults")
-                        val completion = OfflineRecoveryWorkflow(
-                            KeysteadServerClient(serverUrl, "recovery", "recovery"),
-                        ).recover(serverUsername, encodedKit, passwordChars, identity, recoveryRoot)
-                        completion.recoveredVaultFingerprints.firstOrNull()?.let { recoveredId ->
-                            fingerprint = recoveredId
-                            vaultDirectory = recoveryRoot.resolve("$recoveredId.kvault").toString()
-                        }
-                        status = "Account and ${completion.recoveredVaultFingerprints.size} vaults recovered"
-                    }
-                },
-                onRequestVerifiedDeviceRecovery = {
-                    val identity = deviceIdentity ?: return@LifecyclePanel
-                    runAction {
-                        replacementRequest = VerifiedDeviceRecoveryWorkflow(
-                            KeysteadServerClient(serverUrl, "recovery", "recovery"),
-                        ).request(serverUsername, identity)
-                        status = "Verified-device recovery request created"
-                    }
-                },
-                onApproveVerifiedDeviceRecovery = {
-                    val identity = deviceIdentity ?: return@LifecyclePanel
-                    val current = session ?: return@LifecyclePanel
-                    runAction {
-                        val workflow = VerifiedDeviceRecoveryWorkflow(serverClient())
-                        val request = replacementRequest
-                            ?: RecoveryClient(serverClient()).listDeviceRecoveryRequests()
-                                .firstOrNull { it.state == ServerRecoveryDeviceRequestState.PENDING }
-                            ?: throw IllegalStateException("No pending device recovery request")
-                        workflow.approve(request, identity, listOf(current))
-                        status = "Replacement device recovery approved"
-                    }
-                },
-                onCompleteVerifiedDeviceRecovery = { replacementPassword ->
-                    val identity = deviceIdentity ?: return@LifecyclePanel
-                    val request = replacementRequest ?: return@LifecyclePanel
-                    val passwordChars = replacementPassword.toCharArray()
-                    runAction {
-                        val completion = VerifiedDeviceRecoveryWorkflow(
-                            KeysteadServerClient(serverUrl, "recovery", "recovery"),
-                        ).complete(request, identity, passwordChars)
-                        status = "Account recovered; ${completion.recoveredVaultFingerprints.size} vault packages are ready"
-                    }
-                },
+                credentialLoaded = localUnlockCredential != null,
+                enrollmentEligible = localUnlockCredentialManager.canEnrollVaultKey,
+                localLoginEnrolled = deviceLoginAvailable,
+            )
+        LocalLoginPanel(
+            secureStorage = localUnlockStorageModel,
+            presentation = localPresentation,
+            passphrase = localLoginPassphrase,
+            onPassphraseChange = { localLoginPassphrase = it },
+            credentialLoaded = localUnlockCredential != null,
+            localLogin = localLoginPresentation,
+            onLoadCredential = { loadLocalUnlockCredential() },
+            onCreateBiometricCredential = { createBiometricLocalLogin() },
+            onCreatePassphraseCredential = { createPassphraseLocalLogin() },
+            onRemoveLocalLogin = {
+                destructiveGate.request(DestructiveConfirmation.RemoveDeviceLogin)
+            },
+        )
+    }
+    val settingsPanel: @Composable () -> Unit = {
+        val vaultFileExists =
+            runCatching {
+                val path = Path.of(vaultDirectory)
+                path.fileName.toString().endsWith(".kvault", ignoreCase = true) &&
+                    Files.isRegularFile(path)
+            }.getOrDefault(false)
+        SettingsPanel(
+            vaultFile = vaultDirectory,
+            presentation =
+                SettingsPresentation.derive(
+                    vaultOpen = session != null,
+                    vaultFileExists = vaultFileExists,
+                ),
+            locale = locale,
+            onLocaleChange = onLocaleChange,
+            onDeleteVaultFile = {
+                destructiveGate.request(
+                    DestructiveConfirmation.DeleteVaultFile(vaultDirectory),
+                )
+            },
         )
     }
     val listPanel: @Composable (Modifier) -> Unit = { modifier ->
@@ -1081,7 +1547,7 @@ fun KeysteadClientApp() {
                 filterCategory = ""
                 filterProvider = ""
                 filterSoftware = ""
-                status = "Filters cleared"
+                status = strings.filtersCleared
             },
             groupingMode = groupingMode,
             onGroupingChange = { groupingMode = it },
@@ -1096,6 +1562,12 @@ fun KeysteadClientApp() {
                 revealedValue = ""
                 totpCode = ""
                 inspectorSheetOpen = true
+            },
+            onAddSecret = {
+                clearSecretEditor()
+                selectedSecretId = null
+                inspectorSheetOpen = false
+                currentDestination = top.focess.keystead.client.ui.KeysteadDestination.ADD
             },
             modifier = modifier,
         )
@@ -1123,23 +1595,27 @@ fun KeysteadClientApp() {
                             )
                     }
                     revealGeneration = revealLifecycle.reveal(selected.id, revealedValue, java.time.Instant.now())
-                    status = "Secret revealed"
+                    status = strings.secretRevealed
                 }
+            },
+            onHide = {
+                revealLifecycle.clear()
+                revealedValue = ""
             },
             onCopy = {
                 revealedValue.takeIf { it.isNotEmpty() }?.let {
                     clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
-                    status = "Copied to clipboard"
+                    status = strings.copiedToClipboard
                 }
             },
             onToggleTotpCode = {
                 showTotpCode = !showTotpCode
-                status = if (showTotpCode) "Authentication code shown" else "Authentication code hidden"
+                status = if (showTotpCode) strings.authCodeShown else strings.authCodeHidden
             },
             onCopyTotpCode = {
                 totpCode.takeIf { it.isNotEmpty() }?.let {
                     clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
-                    status = "Copied code to clipboard"
+                    status = strings.copiedCodeToClipboard
                 }
             },
             onDelete = {
@@ -1168,7 +1644,7 @@ fun KeysteadClientApp() {
                     expiry = snapshot.expiry.orEmpty()
                     structuredFields = snapshot.fields
                     editingSecretId = snapshot.id
-                    status = "Loaded secret for edit"
+                    status = strings.loadedSecretForEdit
                     currentDestination = top.focess.keystead.client.ui.KeysteadDestination.ADD
                 }
             },
@@ -1176,17 +1652,20 @@ fun KeysteadClientApp() {
         )
     }
 
-    LaunchedEffect(serverAuthSession, currentDestination) {
+    LaunchedEffect(serverAuthSession, serverAvailability, currentDestination) {
         if (serverAuthSession != null &&
+            serverAvailability.isOnline &&
             currentDestination == top.focess.keystead.client.ui.KeysteadDestination.SHARE
         ) {
-            runAction { outstandingShares = serverClient().listShares() }
+            runAction(serverAction = true) { outstandingShares = serverClient().listShares() }
         }
     }
 
     val sharePanel: @Composable () -> Unit = {
         SharePanel(
             authenticated = serverAuthSession != null,
+            serverAvailability = serverAvailability,
+            onCheckServer = { serverCheckGeneration += 1 },
             title = shareTitle,
             onTitleChange = { shareTitle = it },
             payload = sharePayload,
@@ -1201,12 +1680,12 @@ fun KeysteadClientApp() {
             onClearMinted = { mintedShare = null },
             onCopyCode = { code ->
                 clipboardTicket = clipboardLifecycle.copy(code, java.time.Instant.now())
-                status = "Copied share code to clipboard (clears in 30s)"
+                status = strings.copiedShareCodeToClipboard
             },
             onMint = {
                 val passphrase = sharePassphrase.toCharArray()
                 try {
-                    runAction {
+                    runAction(serverAction = true) {
                         val minted =
                             shareExchange.mint(
                                 serverClient(),
@@ -1221,7 +1700,7 @@ fun KeysteadClientApp() {
                         sharePayload = ""
                         sharePassphrase = ""
                         outstandingShares = serverClient().listShares()
-                        status = "Share minted: ${minted.code}"
+                        status = strings.shareMinted(minted.code)
                     }
                 } finally {
                     Wipe.wipe(passphrase)
@@ -1237,7 +1716,7 @@ fun KeysteadClientApp() {
                 val passphrase = redeemPassphrase.toCharArray()
                 val code = redeemCode.trim()
                 try {
-                    runAction {
+                    runAction(serverAction = true) {
                         val contents =
                             shareExchange.redeem(
                                 KeysteadServerClient.forPublicRedeem(serverUrl),
@@ -1247,7 +1726,7 @@ fun KeysteadClientApp() {
                         redeemedContents = contents
                         redeemCode = ""
                         redeemPassphrase = ""
-                        status = "Share redeemed"
+                        status = strings.shareRedeemed
                     }
                 } finally {
                     Wipe.wipe(passphrase)
@@ -1255,82 +1734,311 @@ fun KeysteadClientApp() {
             },
             outstandingShares = outstandingShares,
             onRefreshShares = {
-                runAction {
+                runAction(serverAction = true) {
                     outstandingShares = serverClient().listShares()
-                    status = "Loaded ${outstandingShares.size} share(s)"
+                    status = strings.loadedShares(outstandingShares.size)
                 }
             },
             onDeleteShare = { code ->
-                runAction {
+                runAction(serverAction = true) {
                     serverClient().deleteShare(code)
                     outstandingShares = outstandingShares.filterNot { it.code == code }
-                    status = "Deleted share $code"
+                    status = strings.deletedShare(code)
                 }
             },
         )
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val deviceUnlockModel =
+        DeviceUnlockUiModel.derive(
+            descriptor = localUnlockDescriptor,
+            credentialLoaded = localUnlockCredential != null,
+            loadedPersistence = localUnlockCredentialManager.currentPersistence,
+            selectedMode = localUnlockStorageModel.selectedMode,
+            biometricAvailability = localUnlockStorageModel.biometricAvailability,
+            deviceLoginAvailable = deviceLoginAvailable,
+        )
+    val restoreTargetAvailable =
+        runCatching {
+            serverRestoreTarget.isNotBlank() &&
+                !Files.exists(Path.of(serverRestoreTarget))
+        }.getOrDefault(false)
+    val serverVaultRestoreModel =
+        ServerVaultRestoreModel.derive(
+            authenticated = serverAuthSession != null,
+            serverAvailability = serverAvailability,
+            requestState = ownVaultAccessRequest?.state,
+            approvedPackageAvailable = ownVaultAccessRequest?.approvedPackage != null,
+            targetPathAvailable = restoreTargetAvailable,
+            masterPassphraseReady =
+                BackupFormModel.canUseNewMasterPassphrase(
+                    serverRestoreNewMasterPassphrase,
+                    serverRestoreNewMasterPassphraseConfirmation,
+                ),
+        )
+    val vaultAccessApprovalContent: @Composable () -> Unit = {
+        VaultAccessApprovalPanel(
+            authenticated = serverAuthSession != null,
+            serverAvailability = serverAvailability,
+            vaultOpen = session != null,
+            pendingAccessRequest = pendingApprovalRequest,
+            onCheckServer = { serverCheckGeneration += 1 },
+            onFindPendingAccessRequest = find@{
+                runAction(serverAction = true) {
+                    pendingApprovalRequest =
+                        VaultAccessWorkflow(serverClient())
+                            .pending()
+                            .firstOrNull {
+                                it.requestId != vaultAccessExchangeSession?.requestId
+                            }
+                            ?: throw IllegalStateException(strings.noPendingVaultAccessRequest)
+                    status = strings.pendingVaultAccessRequestLoaded
+                }
+            },
+            onApprovePendingAccessRequest = approve@{
+                val current = session ?: return@approve
+                val request = pendingApprovalRequest ?: return@approve
+                runAction(serverAction = true) {
+                    VaultAccessWorkflow(serverClient()).approve(request, current)
+                    pendingApprovalRequest =
+                        request.copy(
+                            state = ServerVaultAccessRequestState.APPROVED,
+                            approvedAt = java.time.Instant.now(),
+                        )
+                    status = strings.vaultAccessApproved
+                }
+            },
+        )
+    }
+    val serverRestoreContent: @Composable () -> Unit = {
+        ServerRestorePanel(
+            model = serverVaultRestoreModel,
+            serverAvailability = serverAvailability,
+            onCheckServer = { serverCheckGeneration += 1 },
+            request = ownVaultAccessRequest,
+            targetPath = serverRestoreTarget,
+            targetPathAvailable = restoreTargetAvailable,
+            onChooseTarget = { chooseServerRestoreTarget() },
+            newMasterPassphrase = serverRestoreNewMasterPassphrase,
+            onNewMasterPassphraseChange = {
+                serverRestoreNewMasterPassphrase = it
+                unlockError = null
+            },
+            newMasterPassphraseConfirmation = serverRestoreNewMasterPassphraseConfirmation,
+            onNewMasterPassphraseConfirmationChange = {
+                serverRestoreNewMasterPassphraseConfirmation = it
+                unlockError = null
+            },
+            onOpenAccount = {
+                currentDestination =
+                    top.focess.keystead.client.ui.KeysteadDestination.ACCOUNT
+            },
+            onCreateRequest = {
+                runAction(serverAction = true) {
+                    val authenticated = serverAuthSession
+                        ?: throw IllegalStateException(strings.notSignedIn)
+                    val error = beginVaultAccessExchange(authenticated)
+                    if (error != null) throw IllegalStateException(error)
+                    status = strings.vaultAccessRequestCreated
+                }
+            },
+            onRefreshRequest = {
+                val request = ownVaultAccessRequest ?: return@ServerRestorePanel
+                runAction(serverAction = true) {
+                    val refreshed =
+                        VaultAccessWorkflow(serverClient()).refresh(request.requestId)
+                    vaultAccessLifecycle.updateRequest(refreshed)
+                    ownVaultAccessRequest = refreshed
+                    status = strings.vaultAccessRequestUpdated
+                }
+            },
+            onRestore = restore@{
+                val approvedRequest = ownVaultAccessRequest
+                val exchange = vaultAccessExchangeSession
+                if (approvedRequest?.approvedPackage == null || exchange == null) {
+                    reportUnlockError(
+                        strings.serverVaultRestoreStatus(
+                            serverVaultRestoreModel.copy(
+                                stage = ServerVaultRestoreStage.WAITING_FOR_PACKAGE,
+                            ),
+                        ),
+                    )
+                    return@restore
+                }
+                if (
+                    !BackupFormModel.canUseNewMasterPassphrase(
+                        serverRestoreNewMasterPassphrase,
+                        serverRestoreNewMasterPassphraseConfirmation,
+                    )
+                ) {
+                    reportUnlockError(strings.masterPassphrasesDoNotMatch)
+                    return@restore
+                }
+                if (serverRestoreTarget.isBlank()) {
+                    reportUnlockError(strings.vaultFileMustNotBeBlank)
+                    return@restore
+                }
+                val target =
+                    runCatching { Path.of(serverRestoreTarget) }
+                        .getOrElse {
+                            reportUnlockError(strings.vaultFileMustNotBeBlank)
+                            return@restore
+                        }
+                if (Files.exists(target)) {
+                    reportUnlockError(
+                        strings.serverVaultRestoreStatus(
+                            serverVaultRestoreModel.copy(
+                                stage = ServerVaultRestoreStage.TARGET_IN_USE,
+                            ),
+                        ),
+                    )
+                    return@restore
+                }
+                unlockError = null
+                runAction(
+                    onError = { unlockError = it },
+                    serverAction = true,
+                ) {
+                    val result =
+                        ServerVaultProvisioningService()
+                            .restore(
+                                file = target,
+                                request = approvedRequest,
+                                exchangeSession = exchange,
+                                newMasterPassphrase =
+                                    serverRestoreNewMasterPassphrase.toCharArray(),
+                                client = serverClient(),
+                                stateStore = syncStateStore(target),
+                            )
+                    session?.close()
+                    session = result.session
+                    vaultDirectory =
+                        vaultLocationSettings
+                            .rememberSuccessfulVault(target)
+                            .toString()
+                    fingerprint = requireNotNull(approvedRequest.approvedPackage).fingerprint
+                    clearVaultAccessState()
+                    selectedSecretId = null
+                    revealLifecycle.clear()
+                    revealedValue = ""
+                    clearSecretEditor()
+                    refresh(result.session)
+                    serverRestoreNewMasterPassphrase = ""
+                    serverRestoreNewMasterPassphraseConfirmation = ""
+                    currentDestination =
+                        top.focess.keystead.client.ui.KeysteadDestination.SECRETS
+                    status = strings.restoredVaultFromServer(result.pulledRecords)
+                    if (result.rejectedRecords > 0) {
+                        actionFeedbackState.error(
+                            strings.rejectedServerRecords(result.rejectedRecords),
+                        )
+                    }
+                }
+            },
+        )
+    }
+    CompositionLocalProvider(LocalStrings provides locale.strings) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val layoutMode = KeysteadWindowMetrics.modeForWidth(maxWidth.value)
         top.focess.keystead.client.ui.KeysteadAppShell(
             vaultOpen = session != null,
             destination = currentDestination,
             onDestinationChange = {
+                if (it != currentDestination &&
+                    currentDestination ==
+                        top.focess.keystead.client.ui.KeysteadDestination.RECOVERY
+                ) {
+                    serverRestoreNewMasterPassphrase = ""
+                    serverRestoreNewMasterPassphraseConfirmation = ""
+                }
+                if (it != currentDestination &&
+                    it in
+                        setOf(
+                            top.focess.keystead.client.ui.KeysteadDestination.BACKUP,
+                            top.focess.keystead.client.ui.KeysteadDestination.RECOVERY,
+                        )
+                ) {
+                    backupPassword = ""
+                    backupPasswordConfirmation = ""
+                    backupNewMasterPassphrase = ""
+                    backupNewMasterPassphraseConfirmation = ""
+                    pendingBackupRestore = null
+                }
                 currentDestination = it
                 if (it != top.focess.keystead.client.ui.KeysteadDestination.SECRETS) inspectorSheetOpen = false
             },
-            status = status,
+            serverAvailability = serverAvailability,
+            feedback = actionFeedbackState.current,
+            onDismissFeedback = actionFeedbackState::dismiss,
             layoutMode = layoutMode,
             inspectorSheetVisible = inspectorSheetOpen && selectedSecret != null,
             onDismissInspectorSheet = { inspectorSheetOpen = false },
-            onLockVault = {
-                session?.close()
-                session = null
-                secrets = emptyList()
-                selectedSecretId = null
-                revealLifecycle.clear()
-                revealedValue = ""
-                clipboardLifecycle.dispose(java.time.Instant.now(), clipboardTicket)
-                clipboardTicket = null
-                clearSecretEditor()
-                masterPassword = ""
-                serverPassword = ""
-                shareTitle = ""
-                sharePayload = ""
-                sharePassphrase = ""
-                redeemCode = ""
-                redeemPassphrase = ""
-                redeemedContents = null
-                mintedShare = null
-                outstandingShares = emptyList()
-                unloadDeviceIdentity()
-                currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
-                inspectorSheetOpen = false
-                status = "Vault locked"
-                unlockError = null
-            },
+            onLockVault = { lockVault() },
             secretsContent = { modifier -> listPanel(modifier) },
             inspectorContent = { modifier -> inspectorPanel(modifier) },
             addContent = { addPanel() },
+            backupContent = { backupPanel() },
+            deviceAccessContent = { deviceAccessPanel() },
+            accountContent = { accountPanel() },
             syncContent = { syncPanel() },
-            protectionContent = { protectionPanel() },
             shareContent = { sharePanel() },
+            recoveryContent = {
+                RecoveryHub(
+                    method = recoveryMethod,
+                    onMethodChange = { next ->
+                        if (next != recoveryMethod) {
+                            backupPassword = ""
+                            backupPasswordConfirmation = ""
+                            backupNewMasterPassphrase = ""
+                            backupNewMasterPassphraseConfirmation = ""
+                            serverRestoreNewMasterPassphrase = ""
+                            serverRestoreNewMasterPassphraseConfirmation = ""
+                            pendingBackupRestore = null
+                        }
+                        recoveryMethod = next
+                    },
+                    portableBackupContent = { portableBackupRestorePanel() },
+                    serverRestoreContent = {
+                        ServerRecoveryHub(
+                            task = serverRecoveryTask,
+                            onTaskChange = { next ->
+                                if (next != serverRecoveryTask) {
+                                    serverRestoreNewMasterPassphrase = ""
+                                    serverRestoreNewMasterPassphraseConfirmation = ""
+                                }
+                                serverRecoveryTask = next
+                            },
+                            restoreContent = { serverRestoreContent() },
+                            approvalContent = { vaultAccessApprovalContent() },
+                        )
+                    },
+                )
+            },
+            settingsContent = { settingsPanel() },
             unlockContent = {
                 top.focess.keystead.client.ui.UnlockScreen(
                     vaultDirectory = vaultDirectory,
                     masterPassword = masterPassword,
                     errorMessage = unlockError,
+                    deviceUnlock = deviceUnlockModel,
+                    devicePassphrase = localLoginPassphrase,
                     onVaultDirectoryChange = {
                         vaultDirectory = it
                         unlockError = null
                     },
+                    onChooseExistingVault = { chooseExistingVaultFile() },
+                    onChooseNewVaultLocation = { chooseNewVaultFile() },
                     onMasterPasswordChange = {
                         masterPassword = it
                         unlockError = null
                     },
+                    onDevicePassphraseChange = {
+                        localLoginPassphrase = it
+                        unlockError = null
+                    },
                     onOpen = open@{
                         if (vaultDirectory.isBlank()) {
-                            unlockError = "Vault file must not be blank"
+                            reportUnlockError(strings.vaultFileMustNotBeBlank)
                             return@open
                         }
                         unlockError = null
@@ -1342,13 +2050,67 @@ fun KeysteadClientApp() {
                                 )
                             session?.close()
                             session = opened
+                            vaultDirectory =
+                                vaultLocationSettings
+                                    .rememberSuccessfulVault(Path.of(vaultDirectory))
+                                    .toString()
                             fingerprint = opened.fingerprintValue()
                             masterPassword = ""
                             selectedSecretId = null
                             revealLifecycle.clear()
                             revealedValue = ""
                             clearSecretEditor()
-                            status = "Vault open"
+                            refresh(opened)
+                            if (localUnlockDescriptor?.persistence ==
+                                    LocalLoginPersistence.BIOMETRIC &&
+                                localUnlockCredential == null
+                            ) {
+                                loadLocalUnlockCredential()
+                            } else {
+                                status =
+                                    if (enableDeviceLoginIfReady()) {
+                                        strings.deviceLoginEnabled
+                                    } else {
+                                        strings.vaultOpen
+                                    }
+                            }
+                        }
+                    },
+                    onOpenWithDeviceKey = {
+                        if (vaultDirectory.isBlank()) {
+                            reportUnlockError(strings.vaultFileMustNotBeBlank)
+                            return@UnlockScreen
+                        }
+                        if (localUnlockCredential == null && localUnlockDescriptor != null) {
+                            unlockError = null
+                            loadLocalUnlockCredential(onError = { unlockError = it })
+                        }
+                        val credential = localUnlockCredential
+                        if (credential == null) {
+                            unlockError =
+                                unlockError
+                                    ?: status.ifBlank { strings.deviceLoginNotConfigured }
+                            return@UnlockScreen
+                        }
+                        unlockError = null
+                        runAction(onError = { unlockError = it }) {
+                            val opened = LocalVaultSession.openWithLocalLogin(
+                                Path.of(vaultDirectory),
+                                credential,
+                            )
+                            session?.close()
+                            session = opened
+                            vaultDirectory =
+                                vaultLocationSettings
+                                    .rememberSuccessfulVault(Path.of(vaultDirectory))
+                                    .toString()
+                            fingerprint = opened.fingerprintValue()
+                            masterPassword = ""
+                            selectedSecretId = null
+                            revealLifecycle.clear()
+                            revealedValue = ""
+                            clearSecretEditor()
+                            status = strings.vaultOpen
                             refresh(opened)
                         }
                     },
@@ -1356,24 +2118,65 @@ fun KeysteadClientApp() {
             },
         )
     }
+    }
     val pendingDestructive = destructiveGate.pending
     if (pendingDestructive != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { destructiveGate.cancel() },
-            title = { androidx.compose.material3.Text(pendingDestructive.title) },
-            text = { androidx.compose.material3.Text(pendingDestructive.message) },
+            title = { androidx.compose.material3.Text(pendingDestructive.title(strings)) },
+            text = { androidx.compose.material3.Text(pendingDestructive.message(strings)) },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = {
-                    when (val confirmed = destructiveGate.confirm()) {
-                        is DestructiveConfirmation.DeleteSecret -> performDeleteSecret(confirmed.secretId)
-                        DestructiveConfirmation.RevokeDevice -> performRevokeDevice()
-                        null -> {}
-                    }
-                }) { androidx.compose.material3.Text("Confirm") }
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        when (val confirmed = destructiveGate.confirm()) {
+                            is DestructiveConfirmation.DeleteSecret -> performDeleteSecret(confirmed.secretId)
+                            is DestructiveConfirmation.DeleteVaultFile ->
+                                performDeleteVaultFile(confirmed.vaultFile)
+                            is DestructiveConfirmation.RemoveServerRecords ->
+                                performRemoveServerRecords(confirmed.secretIds)
+                            DestructiveConfirmation.RemoveDeviceLogin -> performRemoveDeviceLogin()
+                            null -> {}
+                        }
+                    },
+                    colors =
+                        androidx.compose.material3.ButtonDefaults.textButtonColors(
+                            contentColor = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                        ),
+                ) { androidx.compose.material3.Text(strings.confirm) }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { destructiveGate.cancel() }) {
-                    androidx.compose.material3.Text("Cancel")
+                    androidx.compose.material3.Text(strings.cancel)
+                }
+            },
+        )
+    }
+    val restoreToConfirm = pendingBackupRestore
+    if (restoreToConfirm != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingBackupRestore = null },
+            title = { androidx.compose.material3.Text(strings.confirmBackupRestoreTitle) },
+            text = {
+                androidx.compose.material3.Text(
+                    strings.confirmBackupRestoreMessage(
+                        restoreToConfirm.source?.toString().orEmpty(),
+                        restoreToConfirm.target?.toString().orEmpty(),
+                    ),
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        pendingBackupRestore = null
+                        performRestoreBackup(restoreToConfirm)
+                    },
+                ) {
+                    androidx.compose.material3.Text(strings.restoreBackup)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { pendingBackupRestore = null }) {
+                    androidx.compose.material3.Text(strings.cancel)
                 }
             },
         )

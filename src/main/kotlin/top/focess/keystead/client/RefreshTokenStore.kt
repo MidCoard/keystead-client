@@ -15,7 +15,6 @@ import java.util.Properties
 internal data class PersistedAuthSession(
     val baseUrl: String,
     val username: String,
-    val deviceId: String?,
     val refreshToken: String,
     val refreshTokenExpiresAt: Instant,
 )
@@ -54,7 +53,6 @@ internal class RefreshTokenStore(
         val properties = Properties()
         properties.setProperty("baseUrl", session.baseUrl)
         properties.setProperty("username", session.username)
-        properties.setProperty("deviceId", session.deviceId.orEmpty())
         properties.setProperty("refreshToken", session.refreshToken)
         properties.setProperty("refreshTokenExpiresAt", session.refreshTokenExpiresAt.toString())
         val out = ByteArrayOutputStream()
@@ -70,8 +68,7 @@ internal class RefreshTokenStore(
             val username = properties.getProperty("username") ?: return null
             val refreshToken = properties.getProperty("refreshToken") ?: return null
             val expiresAt = properties.getProperty("refreshTokenExpiresAt") ?: return null
-            val deviceId = properties.getProperty("deviceId")?.takeIf { it.isNotEmpty() }
-            PersistedAuthSession(baseUrl, username, deviceId, refreshToken, Instant.parse(expiresAt))
+            PersistedAuthSession(baseUrl, username, refreshToken, Instant.parse(expiresAt))
         } catch (_: RuntimeException) {
             null
         }

@@ -19,9 +19,9 @@ class ConflictAssessmentTest {
             )
         val assessment = ConflictAssessment.from(error)
         assertFalse(assessment.canAutoRecover)
-        assertNotNull(assessment.warning)
+        val warning = assertNotNull(assessment.warning)
         assertTrue(assessment.title.contains("deleted", ignoreCase = true))
-        assertTrue(assessment.warning!!.contains("discards", ignoreCase = true))
+        assertTrue(warning.contains("discards", ignoreCase = true))
     }
 
     @Test

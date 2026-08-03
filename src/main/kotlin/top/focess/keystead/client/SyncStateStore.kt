@@ -9,14 +9,24 @@ class SyncStateStore(private val directory: Path) {
 
     fun lastPushedRevision(fingerprint: String): Long = revision(fingerprint, "pushed")
 
-    fun lastPulledRevision(fingerprint: String): Long = revision(fingerprint, "pulled")
+    fun lastPulledServerSequence(fingerprint: String): Long =
+        load().getProperty(serverSequenceKey(fingerprint))?.toLongOrNull() ?: 0L
 
     fun recordPushed(fingerprint: String, revision: Long) {
         record(fingerprint, "pushed", revision)
     }
 
-    fun recordPulled(fingerprint: String, revision: Long) {
-        record(fingerprint, "pulled", revision)
+    fun recordPulledServerSequence(fingerprint: String, sequence: Long) {
+        require(sequence >= 0) { "Server sequence must not be negative" }
+        val properties = load()
+        val key = serverSequenceKey(fingerprint)
+        val current = properties.getProperty(key)?.toLongOrNull() ?: 0L
+        if (sequence < current) return
+        properties.setProperty(key, sequence.toString())
+        Files.createDirectories(directory)
+        Files.newOutputStream(stateFile).use { output ->
+            properties.store(output, "Keystead sync state")
+        }
     }
 
     private fun revision(fingerprint: String, direction: String): Long =
@@ -46,4 +56,7 @@ class SyncStateStore(private val directory: Path) {
 
     private fun key(fingerprint: String, direction: String): String =
         "vault.$fingerprint.last${direction.replaceFirstChar { it.uppercase() }}Revision"
+
+    private fun serverSequenceKey(fingerprint: String): String =
+        "vault.$fingerprint.lastPulledServerSequence"
 }

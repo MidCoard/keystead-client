@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import top.focess.keystead.client.i18n.EnStrings
 
 class ConfirmationGateTest {
 
@@ -47,11 +48,25 @@ class ConfirmationGateTest {
     @Test
     fun destructiveConfirmationCopyIncludesPayload() {
         val delete = DestructiveConfirmation.DeleteSecret("id-1", "GitHub token")
-        assertEquals("Delete secret", delete.title)
-        assertTrue(delete.message.contains("GitHub token"))
-        assertTrue(delete.message.contains("cannot be undone"))
-        val revoke = DestructiveConfirmation.RevokeDevice
-        assertEquals("Revoke device", revoke.title)
-        assertTrue(revoke.message.contains("signed out"))
+        assertEquals("Delete secret", delete.title(EnStrings))
+        assertTrue(delete.message(EnStrings).contains("GitHub token"))
+        assertTrue(delete.message(EnStrings).contains("cannot be undone"))
+        val removeDeviceLogin = DestructiveConfirmation.RemoveDeviceLogin
+        assertEquals("Remove local login?", removeDeviceLogin.title(EnStrings))
+        assertTrue(removeDeviceLogin.message(EnStrings).contains("master password"))
+        assertTrue(removeDeviceLogin.message(EnStrings).contains("local-login slots"))
+        val deleteVault =
+            DestructiveConfirmation.DeleteVaultFile(
+                "C:\\Users\\Alice\\Vaults\\personal.kvault",
+            )
+        assertEquals("Delete vault file?", deleteVault.title(EnStrings))
+        assertTrue(deleteVault.message(EnStrings).contains("personal.kvault"))
+        assertTrue(deleteVault.message(EnStrings).contains("cannot be undone"))
+        val removeServerRecords =
+            DestructiveConfirmation.RemoveServerRecords(setOf("secret-a", "secret-b"))
+        assertEquals("Remove server copies?", removeServerRecords.title(EnStrings))
+        assertTrue(removeServerRecords.message(EnStrings).contains("2"))
+        assertTrue(removeServerRecords.message(EnStrings).contains("local vault"))
+        assertTrue(removeServerRecords.message(EnStrings).contains("uploaded again"))
     }
 }

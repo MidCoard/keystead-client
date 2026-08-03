@@ -1,40 +1,37 @@
 package top.focess.keystead.client
 
 object SyncFormModel {
-    fun canLogin(serverUrl: String, username: String, password: String): Boolean =
-        serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
-
-    fun canLoginWithDevice(
+    fun canLogin(
         serverUrl: String,
         username: String,
         password: String,
-        identityLoaded: Boolean,
-    ): Boolean = identityLoaded && canLogin(serverUrl, username, password)
+        serverAvailable: Boolean,
+    ): Boolean =
+        serverAvailable &&
+            serverUrl.isNotBlank() &&
+            username.isNotBlank() &&
+            password.isNotBlank()
 
-    fun canUseServer(authenticated: Boolean): Boolean = authenticated
-
-    fun canRegisterUser(serverUrl: String, username: String, password: String): Boolean =
-        serverUrl.isNotBlank() && username.isNotBlank() && password.length >= 12
-
-    fun canCreateServerVault(
-        vaultOpen: Boolean,
+    fun canUseServer(
         authenticated: Boolean,
-    ): Boolean = vaultOpen && authenticated
+        serverAvailable: Boolean,
+    ): Boolean = authenticated && serverAvailable
 
-    fun canLoadIdentity(deviceId: String, passphrase: String): Boolean =
-        deviceId.isNotBlank() && passphrase.isNotBlank()
-
-    fun canEnrollDevice(authenticated: Boolean, identityLoaded: Boolean): Boolean =
-        authenticated && identityLoaded
-
-    fun canRevokeDevice(
+    fun canEditConnection(
         authenticated: Boolean,
-        identityLoaded: Boolean,
-        registered: Boolean,
-    ): Boolean = authenticated && identityLoaded && registered
+        serverAvailable: Boolean,
+    ): Boolean = !authenticated || !serverAvailable
 
-    fun canPublishKeyPackages(vaultOpen: Boolean, authenticated: Boolean): Boolean =
-        vaultOpen && authenticated
+    fun canRegisterUser(
+        serverUrl: String,
+        username: String,
+        password: String,
+        serverAvailable: Boolean,
+    ): Boolean =
+        serverAvailable &&
+            serverUrl.isNotBlank() &&
+            username.isNotBlank() &&
+            password.length >= 12
 
     fun sinceRevisionOrNull(value: String): Long? {
         val trimmed = value.trim()

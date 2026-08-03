@@ -20,13 +20,41 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import top.focess.keystead.memory.Wipe
 
-class NativeSecureStorage(
+internal fun interface SecureStorageFileWriter {
+    fun write(file: Path, encoded: ByteArray)
+}
+
+private object AtomicSecureStorageFileWriter : SecureStorageFileWriter {
+    override fun write(file: Path, encoded: ByteArray) {
+        Files.createDirectories(file.toAbsolutePath().parent)
+        val temporary = file.resolveSibling(".${file.fileName}.${java.util.UUID.randomUUID()}.tmp")
+        try {
+            FileChannel.open(temporary, CREATE_NEW, WRITE).use { channel ->
+                writeFully(channel, encoded)
+                channel.force(true)
+            }
+            Files.move(temporary, file, ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
+    }
+}
+
+class NativeSecureStorage internal constructor(
     private val file: Path,
     private val instanceId: String,
     private val secretStore: OsSecretStore,
-    private val random: SecureRandom = SecureRandom(),
+    private val random: SecureRandom,
+    private val fileWriter: SecureStorageFileWriter,
 ) : SecureStorage, AutoCloseable {
-    override val capability = SecureStorageCapability.OS_USER_PROTECTED
+    constructor(
+        file: Path,
+        instanceId: String,
+        secretStore: OsSecretStore,
+        random: SecureRandom = SecureRandom(),
+    ) : this(file, instanceId, secretStore, random, AtomicSecureStorageFileWriter)
+
+    override val capability = SecureStorageCapability.OS_BIOMETRIC_GATED
     private val storageKey: ByteArray
     private val values = linkedMapOf<SecureStorageKey, ByteArray>()
     private var closed = false
@@ -38,7 +66,11 @@ class NativeSecureStorage(
             when {
                 existing != null -> existing.copyOf().also { Wipe.wipe(existing) }
                 Files.exists(file) -> throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "native-key-missing")
-                else -> ByteArray(AES_KEY_BYTES).also { random.nextBytes(it); secretStore.save(instanceId, it.copyOf()) }
+                else ->
+                    ByteArray(AES_KEY_BYTES).also {
+                        random.nextBytes(it)
+                        secretStore.save(instanceId, it)
+                    }
             }
         if (storageKey.size != AES_KEY_BYTES) {
             Wipe.wipe(storageKey)
@@ -51,8 +83,20 @@ class NativeSecureStorage(
     override fun save(key: SecureStorageKey, value: ByteArray) {
         requireOpen()
         require(value.size <= SecureStorageCodec.MAX_VALUE_BYTES) { "Secure storage value is too large" }
-        Wipe.wipe(values.put(key, value.copyOf()))
-        persist()
+        val replacement = value.copyOf()
+        val previous = values.put(key, replacement)
+        try {
+            persist()
+            Wipe.wipe(previous)
+        } catch (error: Throwable) {
+            if (previous == null) {
+                values.remove(key)
+            } else {
+                values[key] = previous
+            }
+            Wipe.wipe(replacement)
+            throw error
+        }
     }
 
     @Synchronized override fun load(key: SecureStorageKey): ByteArray? { requireOpen(); return values[key]?.copyOf() }
@@ -61,8 +105,13 @@ class NativeSecureStorage(
     override fun delete(key: SecureStorageKey) {
         requireOpen()
         val removed = values.remove(key) ?: return
-        Wipe.wipe(removed)
-        persist()
+        try {
+            persist()
+            Wipe.wipe(removed)
+        } catch (error: Throwable) {
+            values[key] = removed
+            throw error
+        }
     }
 
     @Synchronized
@@ -138,14 +187,7 @@ class NativeSecureStorage(
             val output = ByteArrayOutputStream()
             DataOutputStream(output).use { data -> data.write(MAGIC); data.writeByte(VERSION); data.write(nonce); data.writeInt(ciphertext.size); data.write(ciphertext) }
             encoded = output.toByteArray()
-            Files.createDirectories(file.toAbsolutePath().parent)
-            val temporary = file.resolveSibling(".${file.fileName}.${java.util.UUID.randomUUID()}.tmp")
-            try {
-                FileChannel.open(temporary, CREATE_NEW, WRITE).use { channel -> channel.write(java.nio.ByteBuffer.wrap(encoded)); channel.force(true) }
-                Files.move(temporary, file, ATOMIC_MOVE, REPLACE_EXISTING)
-            } finally {
-                Files.deleteIfExists(temporary)
-            }
+            fileWriter.write(file, encoded)
         } catch (error: OsSecretStoreException) {
             throw error
         } catch (error: java.io.IOException) {

@@ -3,7 +3,7 @@ package top.focess.keystead.client
 import top.focess.keystead.memory.Wipe
 
 /** Capability advertised by a secure-storage implementation. */
-enum class SecureStorageCapability { MEMORY_ONLY, FILE_PASSPHRASE_PROTECTED, OS_USER_PROTECTED, OS_BIOMETRIC_GATED }
+enum class SecureStorageCapability { MEMORY_ONLY, FILE_PASSPHRASE_PROTECTED, OS_BIOMETRIC_GATED }
 
 data class SecureStorageKey(val namespace: String, val account: String, val name: String) {
     init {

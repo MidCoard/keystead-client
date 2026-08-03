@@ -1,33 +1,18 @@
 package top.focess.keystead.client
 
-object SyncStatusFormatter {
-    fun messageFor(error: KeysteadRevisionConflictException): String {
-        val latest = error.serverRevision ?: error.latestRevision
-        val rejected = error.clientRevision ?: error.rejectedRevision
-        val prefix = targetPrefix(error)
-        if (latest != null && rejected != null) {
-            return "${prefix}Server has revision $latest and rejected local revision $rejected. Pull before pushing again."
-        }
-        val message = error.message ?: "Server has a newer revision."
-        if (message.contains("pull before pushing", ignoreCase = true)) {
-            return message
-        }
-        return "$message Pull before pushing again."
-    }
+import top.focess.keystead.client.i18n.EnStrings
+import top.focess.keystead.client.i18n.Strings
 
-    private fun targetPrefix(error: KeysteadRevisionConflictException): String {
-        val fingerprint = error.fingerprint
-        val secretId = error.secretId
-        if (fingerprint == null || secretId == null) {
-            return ""
-        }
-        val state =
-            if (error.serverDeleted == true) {
-                " was deleted on the server"
-            } else {
-                " has a newer server copy"
-            }
-        val updatedAt = error.serverUpdatedAt?.let { " at $it" } ?: ""
-        return "Secret $secretId in vault $fingerprint$state$updatedAt. "
-    }
+/**
+ * Turns a [KeysteadRevisionConflictException] into a one-line status string for the UI.
+ *
+ * The localized phrasing lives on [Strings.conflictMessage] so the status bar follows the active
+ * locale; this object keeps a stable, testable entry point. The no-argument overload delegates to
+ * [EnStrings] so unit tests keep asserting the canonical English.
+ */
+object SyncStatusFormatter {
+    fun messageFor(error: KeysteadRevisionConflictException): String = messageFor(error, EnStrings)
+
+    internal fun messageFor(error: KeysteadRevisionConflictException, strings: Strings): String =
+        strings.conflictMessage(error)
 }

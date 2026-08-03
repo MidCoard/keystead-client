@@ -8,45 +8,58 @@ import kotlin.test.assertIs
 
 class SecureStorageFactoryTest {
     @Test
-    fun `native selection probes write read and delete`() {
-        val port = FakeOsStore()
-        val directory = Files.createTempDirectory("keystead-native-factory")
-        val result = SecureStorageFactory("test", { _, _ -> port }, SecureRandom())
-            .native(directory, "desktop")
-
-        val available = assertIs<SecureStorageSelection.Available>(result)
-        assertEquals("fake-native", available.providerId)
-        assertEquals(1, port.saves)
-        assertEquals(emptySet(), available.storage.listKeys("keystead-probe", "desktop"))
-        assertEquals(null, available.storage.load(SecureStorageKey("keystead-probe", "desktop", "availability")))
+    fun windowsSelectsOnlyWindowsHelloWithoutCreatingCredential() {
+        val result =
+            SecureStorageFactory("Windows 11", windowHandle = { null })
+                .biometric(Files.createTempDirectory("keystead-windows-hello-factory"), "desktop")
+        val providerId = when (result) {
+            is SecureStorageSelection.Available -> result.providerId
+            is SecureStorageSelection.Unavailable -> result.diagnostic.providerId
+        }
+        assertEquals("windows-hello", providerId)
     }
 
     @Test
-    fun `locked provider returns stable diagnostic and no fallback`() {
-        val port = FakeOsStore(OsSecretStoreStatus.LOCKED)
-        val result = SecureStorageFactory("test", { _, _ -> port }, SecureRandom())
-            .native(Files.createTempDirectory("keystead-native-factory"), "desktop")
+    fun macOsAndLinuxHaveNoBiometricProvider() {
+        val directory = Files.createTempDirectory("keystead-no-biometric-provider")
+        assertEquals("none", assertIs<SecureStorageSelection.Unavailable>(SecureStorageFactory("Mac OS X").biometric(directory, "desktop")).diagnostic.providerId)
+        assertEquals("none", assertIs<SecureStorageSelection.Unavailable>(SecureStorageFactory("Linux").biometric(directory, "desktop")).diagnostic.providerId)
+    }
+
+    @Test
+    fun availabilityCheckDoesNotWriteOrPrompt() {
+        val provider = FakeHelloStore()
+        val result =
+            SecureStorageFactory("windows-test", { _, _ -> provider }, SecureRandom())
+                .biometric(Files.createTempDirectory("keystead-biometric-factory"), "desktop")
+
+        assertEquals("fake-hello", assertIs<SecureStorageSelection.Available>(result).providerId)
+        assertEquals(0, provider.saves)
+        assertEquals(0, provider.loads)
+    }
+
+    @Test
+    fun lockedProviderReturnsDiagnosticWithoutFallback() {
+        val provider = FakeHelloStore(OsSecretStoreStatus.LOCKED)
+        val result =
+            SecureStorageFactory("windows-test", { _, _ -> provider }, SecureRandom())
+                .biometric(Files.createTempDirectory("keystead-biometric-locked"), "desktop")
 
         val unavailable = assertIs<SecureStorageSelection.Unavailable>(result)
         assertEquals(OsSecretStoreFailure.LOCKED, unavailable.diagnostic.failure)
         assertEquals("fake-status", unavailable.diagnostic.diagnosticCode)
-        assertEquals(0, port.saves)
+        assertEquals(0, provider.saves)
     }
 
-    private class FakeOsStore(
+    private class FakeHelloStore(
         private val status: OsSecretStoreStatus = OsSecretStoreStatus.AVAILABLE,
     ) : OsSecretStore {
-        override val providerId = "fake-native"
-        private val values = mutableMapOf<String, ByteArray>()
+        override val providerId = "fake-hello"
         var saves = 0
+        var loads = 0
         override fun availability() = OsSecretStoreAvailability(status, "fake-status")
-        override fun save(instanceId: String, secret: ByteArray) {
-            saves++
-            values[instanceId] = secret.copyOf()
-        }
-        override fun load(instanceId: String) = values[instanceId]?.copyOf()
-        override fun delete(instanceId: String) {
-            values.remove(instanceId)?.fill(0)
-        }
+        override fun save(instanceId: String, secret: ByteArray) { saves += 1 }
+        override fun load(instanceId: String): ByteArray? { loads += 1; return null }
+        override fun delete(instanceId: String) = Unit
     }
 }

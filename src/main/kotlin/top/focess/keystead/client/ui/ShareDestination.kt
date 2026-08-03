@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,13 +27,18 @@ import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import top.focess.keystead.client.ServerAvailability
+import top.focess.keystead.client.ServerFeatureModel
 import top.focess.keystead.client.ServerShareSummary
 import top.focess.keystead.client.ShareExchange
+import top.focess.keystead.client.i18n.LocalStrings
 import top.focess.keystead.share.ShareContents
 
 @Composable
 internal fun SharePanel(
     authenticated: Boolean,
+    serverAvailability: ServerAvailability,
+    onCheckServer: () -> Unit,
     title: String,
     onTitleChange: (String) -> Unit,
     payload: String,
@@ -59,26 +64,42 @@ internal fun SharePanel(
     onRefreshShares: () -> Unit,
     onDeleteShare: (String) -> Unit,
 ) {
+    val strings = LocalStrings.current
+    val serverAvailable = serverAvailability.isOnline
     val mintReady =
-        authenticated && title.isNotBlank() && payload.isNotEmpty() &&
-            ShareExchange.meetsPassphrasePolicy(passphrase)
+        ServerFeatureModel.canMintShare(
+            serverAvailability,
+            authenticated,
+            title,
+            payload,
+            passphrase,
+        )
     val redeemReady =
-        redeemCode.isNotBlank() && ShareExchange.meetsPassphrasePolicy(redeemPassphrase)
+        ServerFeatureModel.canRedeemShare(
+            serverAvailability,
+            redeemCode,
+            redeemPassphrase,
+        )
     DestinationCard {
-        SectionHeader("Share")
+        SectionHeader(strings.shareTitle)
+        ConnectedAvailabilityNotice(serverAvailability, onCheckServer)
         if (!authenticated) {
             Text(
-                "Sign in to Keystead Server on the Sync tab to mint shares. Redeeming a share you received does not require signing in.",
+                strings.shareNotSignedInHelp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
         }
 
-        GroupLabel("Mint a share")
+        CapabilityGroupLabel(
+            strings.groupMintShare,
+            strings.serverRequired,
+            serverAvailable,
+        )
         OutlinedTextField(
             title,
             onTitleChange,
-            label = { Text("Title") },
+            label = { Text(strings.fieldTitle) },
             enabled = authenticated,
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -86,37 +107,40 @@ internal fun SharePanel(
         OutlinedTextField(
             payload,
             onPayloadChange,
-            label = { Text("Payload (the secret to share)") },
+            label = { Text(strings.payloadLabel) },
             enabled = authenticated,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             passphrase,
             onPassphraseChange,
-            label = { Text("Temp passphrase (min 12 chars, 3 classes)") },
+            label = { Text(strings.tempPassphraseLabel) },
             enabled = authenticated,
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             isError = passphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(passphrase),
             supportingText = {
                 if (passphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(passphrase)) {
-                    Text("Use 12+ characters across at least 3 of lower/upper/digit/symbol.")
+                    Text(strings.passphrasePolicyHint)
                 }
             },
+            keyboardOptions = SubmitKeyboardOptions,
+            keyboardActions = submitKeyboardActions(mintReady, onMint),
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Expires",
+            strings.expires,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             ShareExchange.ShareTtl.entries.forEach { option ->
-                FilterChip(
+                KeysteadChoiceChip(
                     selected = ttl == option,
                     onClick = { onTtlChange(option) },
-                    label = { Text(option.label) },
+                    label = { Text(strings.shareTtlLabel(option)) },
                     enabled = authenticated,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -126,10 +150,10 @@ internal fun SharePanel(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Switch(checked = burnAfterReading, onCheckedChange = onBurnChange, enabled = authenticated)
-            Text("Burn after reading (one-time redeem)", style = MaterialTheme.typography.bodyMedium)
+            Text(strings.burnAfterReading, style = MaterialTheme.typography.bodyMedium)
         }
         Button(onClick = onMint, enabled = mintReady, modifier = Modifier.fillMaxWidth()) {
-            Text("Mint share")
+            Text(strings.mintShare)
         }
         mintedShare?.let { minted ->
             Surface(
@@ -138,24 +162,20 @@ internal fun SharePanel(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Share ready", color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.SemiBold)
+                    Text(strings.shareReady, color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Code: ${minted.code}",
+                        strings.shareCode(minted.code),
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "Expires: ${formatInstant(minted.expiresAt)}",
+                        strings.shareExpires(formatInstant(minted.expiresAt)),
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        if (burnAfterReading) {
-                            "Share this code and the passphrase out of band. The recipient can redeem it once."
-                        } else {
-                            "Share this code and the passphrase out of band."
-                        },
+                        if (burnAfterReading) strings.shareOutOfBandOnce else strings.shareOutOfBand,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -164,10 +184,10 @@ internal fun SharePanel(
                             onClick = { onCopyCode(minted.code) },
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Copy code")
+                            Text(strings.copyCode)
                         }
                         OutlinedButton(onClick = onClearMinted, modifier = Modifier.weight(1f)) {
-                            Text("Clear")
+                            Text(strings.clear)
                         }
                     }
                 }
@@ -175,35 +195,41 @@ internal fun SharePanel(
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        GroupLabel("Redeem a share")
+        CapabilityGroupLabel(
+            strings.groupRedeemShare,
+            strings.serverRequired,
+            serverAvailable,
+        )
         OutlinedTextField(
             redeemCode,
             onRedeemCodeChange,
-            label = { Text("Share code") },
+            label = { Text(strings.shareCodeField) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             redeemPassphrase,
             onRedeemPassphraseChange,
-            label = { Text("Temp passphrase") },
+            label = { Text(strings.tempPassphraseShort) },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
             isError = redeemPassphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(redeemPassphrase),
             supportingText = {
                 if (redeemPassphrase.isNotEmpty() && !ShareExchange.meetsPassphrasePolicy(redeemPassphrase)) {
-                    Text("Use 12+ characters across at least 3 of lower/upper/digit/symbol.")
+                    Text(strings.passphrasePolicyHint)
                 }
             },
+            keyboardOptions = SubmitKeyboardOptions,
+            keyboardActions = submitKeyboardActions(redeemReady, onRedeem),
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Some shares burn after reading - enter the passphrase carefully, as it can only be redeemed once.",
+            strings.someSharesBurnNote,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
         Button(onClick = onRedeem, enabled = redeemReady, modifier = Modifier.fillMaxWidth()) {
-            Text("Redeem share")
+            Text(strings.redeemShare)
         }
         redeemedContents?.let { contents ->
             Surface(
@@ -212,19 +238,19 @@ internal fun SharePanel(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Share opened", color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.SemiBold)
-                    Text("Title: ${contents.title}", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodyMedium)
-                    Text("Type: ${contents.secretType}", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
+                    Text(strings.shareOpened, color = MaterialTheme.colorScheme.onSecondaryContainer, fontWeight = FontWeight.SemiBold)
+                    Text(strings.shareOpenedTitle(contents.title), color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodyMedium)
+                    Text(strings.shareOpenedType(strings.secretTypeLabel(contents.secretType)), color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
                     contents.fields["body"]?.let { body ->
-                        Text("Payload:", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
+                        Text(strings.payloadLabelShort, color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
                         Text(body, color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodyMedium)
                     }
                     contents.sharerNote?.let { note ->
-                        Text("Note: $note", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
+                        Text(strings.shareOpenedNote(note), color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
                     }
-                    Text("Created: ${formatInstant(contents.createdAt)}", color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
+                    Text(strings.shareOpenedCreated(formatInstant(contents.createdAt)), color = MaterialTheme.colorScheme.onSecondaryContainer, style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = onClearRedeemed, modifier = Modifier.fillMaxWidth()) {
-                        Text("Clear")
+                        Text(strings.clear)
                     }
                 }
             }
@@ -232,15 +258,23 @@ internal fun SharePanel(
 
         if (authenticated) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            GroupLabel("Your shares on the server")
+            CapabilityGroupLabel(
+                strings.groupYourShares,
+                strings.serverRequired,
+                serverAvailable,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onRefreshShares, modifier = Modifier.weight(1f)) {
-                    Text("Refresh")
+                OutlinedButton(
+                    onClick = onRefreshShares,
+                    enabled = serverAvailable,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(strings.refresh)
                 }
             }
             if (outstandingShares.isEmpty()) {
                 Text(
-                    "No outstanding shares. Mint one above, or refresh to check the server.",
+                    strings.noOutstandingShares,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -266,22 +300,27 @@ internal fun SharePanel(
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
-                                    "Created ${formatInstant(summary.createdAt)} - expires ${formatInstant(summary.expiresAt)}",
+                                    strings.shareCreatedExpires(formatInstant(summary.createdAt), formatInstant(summary.expiresAt)),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                                 if (summary.burnAfterReading) {
                                     Text(
-                                        "Burns after reading",
+                                        strings.burnsAfterReading,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
                                 OutlinedButton(
                                     onClick = { onDeleteShare(summary.code) },
+                                    enabled = serverAvailable,
                                     modifier = Modifier.fillMaxWidth(),
+                                    colors =
+                                        ButtonDefaults.outlinedButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error,
+                                        ),
                                 ) {
-                                    Text("Delete")
+                                    Text(strings.delete)
                                 }
                             }
                         }
@@ -296,10 +335,10 @@ internal fun SharePanel(
                             onClick = { page = currentPage - 1 },
                             enabled = currentPage > 0,
                         ) {
-                            Text("Previous")
+                            Text(strings.previous)
                         }
                         Text(
-                            "Page ${currentPage + 1} of $totalPages",
+                            strings.pageOf(currentPage + 1, totalPages),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -307,7 +346,7 @@ internal fun SharePanel(
                             onClick = { page = currentPage + 1 },
                             enabled = currentPage < totalPages - 1,
                         ) {
-                            Text("Next")
+                            Text(strings.next)
                         }
                     }
                 }
