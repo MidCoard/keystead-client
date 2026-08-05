@@ -5,6 +5,9 @@ import java.awt.datatransfer.StringSelection
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard as ComposeClipboard
+import kotlinx.coroutines.delay
 
 /** UI-only reveal state; the value is never serialized or logged. */
 class RevealLifecycle(private val durationSeconds: Long = 30) {
@@ -44,8 +47,54 @@ interface ClipboardPort {
 
 class AwtClipboardPort : ClipboardPort {
     override var text: String?
-        get() = runCatching { Toolkit.getDefaultToolkit().systemClipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String }.getOrNull()
-        set(value) { runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(value.orEmpty()), null) } }
+        get() = withClipboardRetry { Toolkit.getDefaultToolkit().systemClipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String }
+        set(value) { withClipboardRetry { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(value.orEmpty()), null) } }
+
+    private fun <T> withClipboardRetry(action: () -> T): T? {
+        repeat(5) { attempt ->
+            try {
+                return action()
+            } catch (error: IllegalStateException) {
+                // Windows reports "Cannot open system clipboard" while another process
+                // holds it; retry briefly before giving up quietly.
+                if (attempt == 4) return null
+                Thread.sleep(60)
+            } catch (_: Exception) {
+                return null
+            }
+        }
+        return null
+    }
+}
+
+/**
+ * Compose's desktop clipboard goes through the same Windows system clipboard and throws
+ * IllegalStateException("Cannot open system clipboard") while another process holds it;
+ * uncaught, that crashes the app on a plain text copy. Retry briefly, then give up quietly.
+ */
+class RetryingClipboard(private val delegate: ComposeClipboard) : ComposeClipboard {
+    override val nativeClipboard: Any
+        get() = delegate.nativeClipboard
+
+    override suspend fun getClipEntry(): ClipEntry? = withClipboardRetry { delegate.getClipEntry() }
+
+    override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+        withClipboardRetry { delegate.setClipEntry(clipEntry) }
+    }
+
+    private suspend fun <T> withClipboardRetry(action: suspend () -> T): T? {
+        repeat(5) { attempt ->
+            try {
+                return action()
+            } catch (error: IllegalStateException) {
+                if (attempt == 4) return null
+                delay(60)
+            } catch (_: Exception) {
+                return null
+            }
+        }
+        return null
+    }
 }
 
 data class ClipboardClearTicket(val digest: String, val expiresAt: Instant, val generation: Long)

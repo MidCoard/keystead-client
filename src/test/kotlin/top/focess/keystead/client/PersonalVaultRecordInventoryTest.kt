@@ -4,7 +4,6 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import top.focess.keystead.service.EncryptedSyncRecord
 import top.focess.keystead.service.SyncRecordEventId
@@ -21,6 +20,7 @@ class PersonalVaultRecordInventoryTest {
                 "profile",
                 "payload",
                 false,
+                "content-key",
             )
 
         val inventory = PersonalVaultRecordInventory.compare(listOf(record), listOf(remote(11, record)))
@@ -28,15 +28,15 @@ class PersonalVaultRecordInventoryTest {
         val history = inventory.remoteHistory.single()
 
         assertEquals("o6nh7ZcyyrKIaBJ74A8c6SGsrv3Vw7I6bp4Acr2cGjQ", comparison.recordHash)
-        assertEquals("47fiwy3Hb3dBWDTsn7mEnwW_i2IvfjIgDvvpXWzOGCU", comparison.localContentHash)
-        assertEquals("47fiwy3Hb3dBWDTsn7mEnwW_i2IvfjIgDvvpXWzOGCU", comparison.serverContentHash)
-        assertEquals("47fiwy3Hb3dBWDTsn7mEnwW_i2IvfjIgDvvpXWzOGCU", comparison.serverAdvertisedContentHash)
+        assertEquals("ac6hbddox4BkPm4eukfXjPBspNdI9c-J4MOaOB2fs6g", comparison.localContentHash)
+        assertEquals("ac6hbddox4BkPm4eukfXjPBspNdI9c-J4MOaOB2fs6g", comparison.serverContentHash)
+        assertEquals("ac6hbddox4BkPm4eukfXjPBspNdI9c-J4MOaOB2fs6g", comparison.serverAdvertisedContentHash)
         assertEquals("GQDqtsAoSD1xJlme5vUN4NJ5B7XGX6kFJFgLSw-YUrA", comparison.localProfileCiphertextHash)
         assertEquals("GQDqtsAoSD1xJlme5vUN4NJ5B7XGX6kFJFgLSw-YUrA", comparison.serverProfileCiphertextHash)
         assertEquals("I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU", comparison.localEnvelopeCiphertextHash)
         assertEquals("I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU", comparison.serverEnvelopeCiphertextHash)
-        assertEquals("47fiwy3Hb3dBWDTsn7mEnwW_i2IvfjIgDvvpXWzOGCU", history.advertisedContentHash)
-        assertEquals("47fiwy3Hb3dBWDTsn7mEnwW_i2IvfjIgDvvpXWzOGCU", history.computedContentHash)
+        assertEquals("ac6hbddox4BkPm4eukfXjPBspNdI9c-J4MOaOB2fs6g", history.advertisedContentHash)
+        assertEquals("ac6hbddox4BkPm4eukfXjPBspNdI9c-J4MOaOB2fs6g", history.computedContentHash)
         assertEquals("GQDqtsAoSD1xJlme5vUN4NJ5B7XGX6kFJFgLSw-YUrA", history.profileCiphertextHash)
         assertEquals("I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU", history.envelopeCiphertextHash)
     }
@@ -85,9 +85,36 @@ class PersonalVaultRecordInventoryTest {
     }
 
     @Test
+    fun reExportedProfileKeepsStableEventIdAndMatches() {
+        // Re-exporting an unchanged record re-encrypts the sync profile with a fresh random
+        // nonce, but the KVE2 event id binds the stable content key instead of the profile
+        // ciphertext, so the fresh export and the pushed copy share the same event id.
+        val local = encrypted("reexport", 3, "stable-payload")
+        val pushed =
+            EncryptedSyncRecord(
+                local.fingerprint(),
+                local.secretId(),
+                local.revision(),
+                local.secretType(),
+                "profile-under-a-fresh-nonce",
+                local.envelope(),
+                false,
+                local.contentKey(),
+            )
+
+        val comparison =
+            PersonalVaultRecordInventory.compare(listOf(local), listOf(remote(9, pushed)))
+                .comparisons.orEmpty().single()
+
+        assertEquals(RecordComparisonStatus.MATCHED, comparison.status)
+        assertEquals(comparison.localContentHash, comparison.serverAdvertisedContentHash)
+    }
+
+    @Test
     fun detectsEqualRevisionContentMismatchAndInvalidAdvertisedHash() {
-        val local = listOf(encrypted("content-conflict", 4, "local"))
-        val remoteRecord = remote(7, encrypted("content-conflict", 4, "remote"))
+        val local = listOf(encrypted("content-conflict", 4, "local", contentKey = "local-content"))
+        val remoteRecord =
+            remote(7, encrypted("content-conflict", 4, "remote", contentKey = "remote-content"))
         val invalidHistoryRecord = remote(8, encrypted("invalid-hash", 1, "payload")).copy(eventId = "bogus")
 
         val inventory = PersonalVaultRecordInventory.compare(local, listOf(remoteRecord, invalidHistoryRecord))
@@ -99,7 +126,7 @@ class PersonalVaultRecordInventoryTest {
     }
 
     @Test
-    fun differentVaultFingerprintsKeepHistoryVisibleButDoNotPretendRecordsAreComparable() {
+    fun differentVaultFingerprintsStillListRecordsWithTheirSides() {
         val local = listOf(encrypted("local", 1, "payload", fingerprint = "local-vault"))
         val remote = listOf(remote(1, encrypted("server", 1, "payload", fingerprint = "server-vault")))
 
@@ -108,7 +135,10 @@ class PersonalVaultRecordInventoryTest {
         assertTrue(inventory.vaultMismatch)
         assertEquals("local-vault", inventory.localFingerprint)
         assertEquals("server-vault", inventory.serverFingerprint)
-        assertNull(inventory.comparisons)
+        // Records stay listed (marked by side in the UI) instead of being hidden.
+        assertEquals(2, inventory.comparisons?.size)
+        assertEquals(RecordComparisonStatus.LOCAL_ONLY, inventory.statusOf("local"))
+        assertEquals(RecordComparisonStatus.SERVER_ONLY, inventory.statusOf("server"))
         assertEquals(1, inventory.remoteHistory.size)
     }
 
@@ -119,6 +149,7 @@ class PersonalVaultRecordInventoryTest {
         secretId: String,
         revision: Long,
         envelope: String,
+        contentKey: String = "content-$secretId-$revision",
         fingerprint: String = "6000000000000001",
     ) =
         EncryptedSyncRecord(
@@ -129,6 +160,7 @@ class PersonalVaultRecordInventoryTest {
             "profile-$secretId-$revision",
             envelope,
             false,
+            contentKey,
         )
 
     private fun remote(sequence: Long, record: EncryptedSyncRecord) =
@@ -142,6 +174,7 @@ class PersonalVaultRecordInventoryTest {
             encryptedProfile = record.encryptedProfile(),
             envelope = record.envelope(),
             deleted = record.deleted(),
+            contentKey = record.contentKey(),
             createdAt = Instant.parse("2030-01-01T00:00:00Z").plusSeconds(sequence),
         )
 
@@ -154,5 +187,6 @@ class PersonalVaultRecordInventoryTest {
             encryptedProfile(),
             if (deleted) "" else envelope(),
             deleted,
+            contentKey(),
         )
 }

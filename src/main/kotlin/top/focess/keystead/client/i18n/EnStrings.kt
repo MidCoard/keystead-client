@@ -404,6 +404,9 @@ internal object EnStrings : Strings {
         "Server unavailable. Check the server address or start the server, then try again."
     override val checkAgain = "Check again"
     override val serverRequired = "Server required"
+    override val loginRequired = "Login required"
+    override val syncNotSignedInHelp =
+        "Sign in on the Account page to pull, upload, and compare encrypted records."
     override val worksOffline = "Works offline"
     override val groupServerSignIn = "Server sign-in"
     override val groupVaultsAndSync = "Vaults and sync"
@@ -440,6 +443,8 @@ internal object EnStrings : Strings {
     override val clearRecordSelection = "Clear selection"
     override fun selectedRecordSummary(selected: Int, uploadable: Int, removable: Int) =
         "$selected selected · $uploadable can upload · $removable have server copies"
+    override fun selectedUploadSummary(selected: Int, uploadable: Int) =
+        "$selected selected · $uploadable can upload"
     override fun uploadSelectedRecords(count: Int) = "Upload selected ($count)"
     override fun removeSelectedServerCopies(count: Int) = "Remove server copies ($count)"
     override fun uploadedSelectedRecords(count: Int) =
@@ -452,6 +457,21 @@ internal object EnStrings : Strings {
     override val historyRemoveHelp =
         "Tick any event to select its whole record. Removal deletes all server events for the selected record(s); local records stay unchanged."
     override val recordIdentifierHash = "Record identifier hash"
+    override val clientSidePane = "This device (local)"
+    override val serverSidePane = "Server"
+    override val revisionLabel = "Revision"
+    override val recordStateLabel = "State"
+    override fun recordStateValue(deleted: Boolean?) =
+        when (deleted) {
+            null -> "not present"
+            true -> "deleted"
+            false -> "active"
+        }
+    override val localBadge = "Local"
+    override val serverBadge = "Server"
+    override val otherVaultBadge = "Other vault"
+    override val uploadRecord = "Upload"
+    override val removeServerCopy = "Remove server copy"
     override val localContentHash = "Local event hash"
     override val serverComputedContentHash = "Server event hash (computed)"
     override val serverAdvertisedContentHash = "Server event hash (advertised)"

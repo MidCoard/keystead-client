@@ -42,7 +42,7 @@ internal data class RemoteRecordHistoryEntry(
     val revision: Long,
     val secretType: String,
     val advertisedContentHash: String,
-    val computedContentHash: String,
+    val computedContentHash: String?,
     val profileCiphertextHash: String,
     val envelopeCiphertextHash: String,
     val hashValid: Boolean,
@@ -86,15 +86,18 @@ internal data class PersonalVaultRecordInventory(
                             computedContentHash = computedContentHash,
                             profileCiphertextHash = RecordDisplayHash.of(remote.encryptedProfile),
                             envelopeCiphertextHash = RecordDisplayHash.of(remote.envelope),
-                            hashValid = remote.eventId == computedContentHash,
+                            hashValid = remote.contentKey.isNotBlank() && remote.eventId == computedContentHash,
                             deleted = remote.deleted,
                             createdAt = remote.createdAt,
                         )
                     }
             val comparisons =
-                if (localRecords == null || vaultMismatch) {
+                if (localRecords == null) {
                     null
                 } else {
+                    // Even on a vault-fingerprint mismatch the records are listed: local
+                    // entries are marked local-only and server entries carry an other-vault
+                    // badge in the UI, so orphaned records stay visible and removable.
                     compareCurrent(localRecords, remoteRecords)
                 }
             return PersonalVaultRecordInventory(
@@ -133,7 +136,8 @@ internal data class PersonalVaultRecordInventory(
         ): RecordComparisonEntry {
             val localHash = local?.let(SyncRecordEventId::of)
             val remoteHash = remote?.contentHash()
-            val remoteHashValid = remote == null || remote.eventId == remoteHash
+            val remoteHashValid =
+                remote == null || (remote.contentKey.isNotBlank() && remote.eventId == remoteHash)
             val status =
                 when {
                     !remoteHashValid -> RecordComparisonStatus.HASH_MISMATCH
@@ -141,6 +145,8 @@ internal data class PersonalVaultRecordInventory(
                     remote == null -> RecordComparisonStatus.LOCAL_ONLY
                     local.revision() > remote.revision -> RecordComparisonStatus.LOCAL_NEWER
                     local.revision() < remote.revision -> RecordComparisonStatus.SERVER_NEWER
+                    // KVE2 event ids are stable across re-exports of unchanged content, so
+                    // equality at equal revision is judged directly on the event ids.
                     localHash == remoteHash -> RecordComparisonStatus.MATCHED
                     else -> RecordComparisonStatus.HASH_MISMATCH
                 }
@@ -174,8 +180,10 @@ internal object RecordDisplayHash {
         )
 }
 
-private fun PersonalVaultRecord.contentHash(): String =
-    SyncRecordEventId.of(
+private fun PersonalVaultRecord.contentHash(): String? {
+    // Legacy pre-KVE2 events carry an empty content key and can never verify.
+    if (contentKey.isBlank()) return null
+    return SyncRecordEventId.of(
         EncryptedSyncRecord(
             fingerprint,
             secretId,
@@ -184,5 +192,7 @@ private fun PersonalVaultRecord.contentHash(): String =
             encryptedProfile,
             envelope,
             deleted,
+            contentKey,
         ),
     )
+}

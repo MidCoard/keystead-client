@@ -5,39 +5,28 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.ConflictAssessment
 import top.focess.keystead.client.PersonalVaultRecordInventory
 import top.focess.keystead.client.RecordComparisonEntry
 import top.focess.keystead.client.RecordComparisonStatus
-import top.focess.keystead.client.RemoteRecordHistoryEntry
 import top.focess.keystead.client.ServerAvailability
 import top.focess.keystead.client.SyncFormModel
-import top.focess.keystead.client.SyncRecordChoice
-import top.focess.keystead.client.SyncRecordSelection
 import top.focess.keystead.client.i18n.LocalStrings
 import top.focess.keystead.model.SecretType
 
@@ -64,8 +53,15 @@ internal fun SyncPanel(
     DestinationCard {
         SectionHeader(strings.serverSync)
         ConnectedAvailabilityNotice(serverAvailability, onCheckServer)
+        if (!authenticated) {
+            Text(
+                strings.syncNotSignedInHelp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
-        GroupLabel(strings.groupVaultsAndSync)
+        CapabilityGroupLabel(strings.groupVaultsAndSync, strings.loginRequired, serverReady)
         Button(
             onClick = onPull,
             enabled = vaultOpen && serverReady,
@@ -131,7 +127,7 @@ internal fun SyncPanel(
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        GroupLabel(strings.recordInventory)
+        CapabilityGroupLabel(strings.recordInventory, strings.loginRequired, serverReady)
         OutlinedButton(
             onClick = onRefreshRecords,
             enabled = serverReady,
@@ -143,7 +139,7 @@ internal fun SyncPanel(
             RecordInventory(
                 inventory = inventory,
                 actionsEnabled = vaultOpen && serverReady,
-                historyActionsEnabled = serverReady,
+                serverActionsEnabled = serverReady,
                 localRecordTitles = localRecordTitles,
                 onUploadSelected = onUploadSelected,
                 onRequestRemoveSelected = onRequestRemoveSelected,
@@ -156,45 +152,14 @@ internal fun SyncPanel(
 private fun RecordInventory(
     inventory: PersonalVaultRecordInventory,
     actionsEnabled: Boolean,
-    historyActionsEnabled: Boolean,
+    serverActionsEnabled: Boolean,
     localRecordTitles: Map<String, String>,
     onUploadSelected: (Set<String>) -> Unit,
     onRequestRemoveSelected: (Set<String>) -> Unit,
 ) {
     val strings = LocalStrings.current
-    val choices =
-        inventory.comparisons.orEmpty().map { entry ->
-            SyncRecordChoice(
-                secretId = entry.secretId,
-                canUpload = entry.localRevision != null,
-                canRemoveFromServer = entry.serverRevision != null,
-            )
-        }
-    var selection by remember(inventory.localFingerprint, inventory.serverFingerprint) {
-        mutableStateOf(SyncRecordSelection())
-    }
-    LaunchedEffect(choices) {
-        selection = selection.reconcile(choices)
-    }
-    val historyChoices =
-        inventory.remoteHistory.map {
-            SyncRecordChoice(secretId = it.secretId, canUpload = false, canRemoveFromServer = true)
-        }
-    var historySelection by remember(inventory.localFingerprint, inventory.serverFingerprint) {
-        mutableStateOf(SyncRecordSelection())
-    }
-    LaunchedEffect(historyChoices) {
-        historySelection = historySelection.reconcile(historyChoices)
-    }
-    val removableHistoryIds = historySelection.removableIds(historyChoices)
     val currentRemoteCount = inventory.remoteHistory.map { it.recordHash }.distinct().size
-    if (inventory.remoteHistory.isEmpty()) {
-        Text(
-            strings.recordInventoryEmpty,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall,
-        )
-    } else {
+    if (inventory.remoteHistory.isNotEmpty()) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = MaterialTheme.shapes.small,
@@ -247,145 +212,38 @@ private fun RecordInventory(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-    } else if (inventory.comparisons == null) {
+    }
+    val comparisons = inventory.comparisons
+    if (comparisons == null) {
         Text(
             strings.unlockVaultToCompare,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
     } else {
-        GroupLabel(strings.currentRecordComparison)
-        Text(
-            strings.recordSelectionHelp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            OutlinedButton(
-                onClick = { selection = selection.selectAll(choices) },
-                enabled = choices.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings.selectAllRecords)
-            }
-            OutlinedButton(
-                onClick = { selection = selection.clear() },
-                enabled = selection.selectedIds.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings.clearRecordSelection)
-            }
-        }
-        val uploadableIds = selection.uploadableIds(choices)
-        val removableIds = selection.removableIds(choices)
-        Text(
-            strings.selectedRecordSummary(
-                selected = selection.selectedIds.size,
-                uploadable = uploadableIds.size,
-                removable = removableIds.size,
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Button(
-                onClick = { onUploadSelected(uploadableIds) },
-                enabled = actionsEnabled && uploadableIds.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings.uploadSelectedRecords(uploadableIds.size))
-            }
-            OutlinedButton(
-                onClick = { onRequestRemoveSelected(removableIds) },
-                enabled = actionsEnabled && removableIds.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-                colors =
-                    ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error,
-                    ),
-            ) {
-                Text(strings.removeSelectedServerCopies(removableIds.size))
-            }
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().height(420.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(inventory.comparisons, key = { it.secretId }) { entry ->
-                ComparisonRow(
-                    entry = entry,
-                    localTitle = localRecordTitles[entry.secretId],
-                    selected = entry.secretId in selection.selectedIds,
-                    onSelectedChange = { selection = selection.toggle(entry.secretId) },
-                )
-            }
-        }
-    }
-
-    if (inventory.remoteHistory.isNotEmpty()) {
-        GroupLabel(strings.serverRecordHistory)
-        Text(
-            strings.historyRemoveHelp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            OutlinedButton(
-                onClick = { historySelection = historySelection.selectAll(historyChoices) },
-                enabled = historyChoices.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings.selectAllRecords)
-            }
-            OutlinedButton(
-                onClick = { historySelection = historySelection.clear() },
-                enabled = historySelection.selectedIds.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings.clearRecordSelection)
-            }
-        }
-        OutlinedButton(
-            onClick = { onRequestRemoveSelected(removableHistoryIds) },
-            enabled = historyActionsEnabled && removableHistoryIds.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth(),
-            colors =
-                ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error,
-                ),
-        ) {
-            Text(strings.removeSelectedServerCopies(removableHistoryIds.size))
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().height(420.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(inventory.remoteHistory, key = { it.serverSequence }) { entry ->
-                HistoryRow(
-                    entry = entry,
-                    selected = entry.secretId in historySelection.selectedIds,
-                    onSelectedChange = { historySelection = historySelection.toggle(entry.secretId) },
-                )
-            }
+        comparisons.forEach { entry ->
+            UnifiedRecordRow(
+                entry = entry,
+                localTitle = localRecordTitles[entry.secretId],
+                otherVault = inventory.vaultMismatch && entry.serverRevision != null,
+                uploadEnabled = actionsEnabled && !inventory.vaultMismatch,
+                removeEnabled = serverActionsEnabled,
+                onUpload = { onUploadSelected(setOf(entry.secretId)) },
+                onRemoveServerCopy = { onRequestRemoveSelected(setOf(entry.secretId)) },
+            )
         }
     }
 }
 
 @Composable
-private fun ComparisonRow(
+private fun UnifiedRecordRow(
     entry: RecordComparisonEntry,
     localTitle: String?,
-    selected: Boolean,
-    onSelectedChange: () -> Unit,
+    otherVault: Boolean,
+    uploadEnabled: Boolean,
+    removeEnabled: Boolean,
+    onUpload: () -> Unit,
+    onRemoveServerCopy: () -> Unit,
 ) {
     val strings = LocalStrings.current
     val accent =
@@ -413,7 +271,6 @@ private fun ComparisonRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Checkbox(checked = selected, onCheckedChange = { onSelectedChange() })
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         localTitle ?: secretTypeLabel(entry.secretType),
@@ -428,6 +285,14 @@ private fun ComparisonRow(
                         )
                     }
                 }
+                if (entry.localRevision != null) {
+                    SideBadge(strings.localBadge, MaterialTheme.colorScheme.primary)
+                }
+                if (otherVault) {
+                    SideBadge(strings.otherVaultBadge, MaterialTheme.colorScheme.error)
+                } else if (entry.serverRevision != null) {
+                    SideBadge(strings.serverBadge, MaterialTheme.colorScheme.tertiary)
+                }
                 Text(
                     strings.recordComparisonStatus(entry.status),
                     color = accent,
@@ -435,127 +300,102 @@ private fun ComparisonRow(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            Text(
-                strings.recordRevisions(entry.localRevision, entry.serverRevision),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                strings.recordDeletionStates(entry.localDeleted, entry.serverDeleted),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                strings.serverSequence(entry.serverSequence),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (entry.localRevision != null) {
+                    Button(
+                        onClick = onUpload,
+                        // Records whose stable content already matches the latest server
+                        // event are not offered for upload; the server would no-op anyway.
+                        enabled = uploadEnabled && entry.status != RecordComparisonStatus.MATCHED,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(strings.uploadRecord)
+                    }
+                }
+                if (entry.serverRevision != null) {
+                    OutlinedButton(
+                        onClick = onRemoveServerCopy,
+                        enabled = removeEnabled,
+                        modifier = Modifier.weight(1f),
+                        colors =
+                            ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ),
+                    ) {
+                        Text(strings.removeServerCopy)
+                    }
+                }
+            }
             HashEvidenceBlock {
                 HashEvidenceRow(strings.recordIdentifierHash, entry.recordHash)
-                HashEvidenceRow(strings.localContentHash, entry.localContentHash)
-                HashEvidenceRow(strings.serverComputedContentHash, entry.serverContentHash)
-                HashEvidenceRow(
-                    strings.serverAdvertisedContentHash,
-                    entry.serverAdvertisedContentHash,
-                )
-                HashEvidenceRow(
-                    strings.localProfileCiphertextHash,
-                    entry.localProfileCiphertextHash,
-                )
-                HashEvidenceRow(
-                    strings.serverProfileCiphertextHash,
-                    entry.serverProfileCiphertextHash,
-                )
-                HashEvidenceRow(
-                    strings.localEnvelopeCiphertextHash,
-                    entry.localEnvelopeCiphertextHash,
-                )
-                HashEvidenceRow(
-                    strings.serverEnvelopeCiphertextHash,
-                    entry.serverEnvelopeCiphertextHash,
-                )
+                if (entry.localRevision != null) {
+                    HashEvidenceRow(
+                        "${strings.localBadge} · ${strings.revisionLabel}",
+                        entry.localRevision.toString(),
+                    )
+                    HashEvidenceRow(
+                        "${strings.localBadge} · ${strings.recordStateLabel}",
+                        strings.recordStateValue(entry.localDeleted),
+                    )
+                    HashEvidenceRow(
+                        strings.localProfileCiphertextHash,
+                        entry.localProfileCiphertextHash,
+                    )
+                    HashEvidenceRow(
+                        strings.localEnvelopeCiphertextHash,
+                        entry.localEnvelopeCiphertextHash,
+                    )
+                }
+                if (entry.serverRevision != null) {
+                    HashEvidenceRow(
+                        "${strings.serverBadge} · ${strings.revisionLabel}",
+                        entry.serverRevision.toString(),
+                    )
+                    HashEvidenceRow(
+                        "${strings.serverBadge} · ${strings.recordStateLabel}",
+                        strings.recordStateValue(entry.serverDeleted),
+                    )
+                    Text(
+                        strings.serverSequence(entry.serverSequence),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    HashEvidenceRow(
+                        strings.serverAdvertisedContentHash,
+                        entry.serverAdvertisedContentHash,
+                    )
+                    HashEvidenceRow(strings.serverComputedContentHash, entry.serverContentHash)
+                    HashEvidenceRow(
+                        strings.serverProfileCiphertextHash,
+                        entry.serverProfileCiphertextHash,
+                    )
+                    HashEvidenceRow(
+                        strings.serverEnvelopeCiphertextHash,
+                        entry.serverEnvelopeCiphertextHash,
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun HistoryRow(
-    entry: RemoteRecordHistoryEntry,
-    selected: Boolean,
-    onSelectedChange: () -> Unit,
-) {
-    val strings = LocalStrings.current
-    val accent =
-        if (entry.hashValid) MaterialTheme.colorScheme.outline
-        else MaterialTheme.colorScheme.error
+private fun SideBadge(label: String, color: Color) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.65f)),
+        shape = MaterialTheme.shapes.extraSmall,
+        color = color.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.6f)),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(checked = selected, onCheckedChange = { onSelectedChange() })
-                Text(
-                    secretTypeLabel(entry.secretType),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    if (entry.hashValid) strings.hashVerified else strings.hashInvalid,
-                    color = accent,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Text(
-                strings.serverRecordMetadata(
-                    secretTypeLabel(entry.secretType),
-                    entry.revision,
-                    entry.deleted,
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                strings.serverSequence(entry.serverSequence),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            HashEvidenceBlock {
-                HashEvidenceRow(strings.recordIdentifierHash, entry.recordHash)
-                HashEvidenceRow(
-                    strings.serverAdvertisedContentHash,
-                    entry.advertisedContentHash,
-                )
-                HashEvidenceRow(
-                    strings.serverComputedContentHash,
-                    entry.computedContentHash,
-                )
-                HashEvidenceRow(
-                    strings.serverProfileCiphertextHash,
-                    entry.profileCiphertextHash,
-                )
-                HashEvidenceRow(
-                    strings.serverEnvelopeCiphertextHash,
-                    entry.envelopeCiphertextHash,
-                )
-            }
-            Text(
-                entry.createdAt.toString(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

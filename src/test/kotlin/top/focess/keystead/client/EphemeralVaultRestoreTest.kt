@@ -145,7 +145,7 @@ class EphemeralVaultRestoreTest {
     }
 
     private fun recordResponse(sequence: Long, event: JsonObject): String =
-        "{\"serverSequence\":$sequence,\"eventId\":${event["eventId"]},\"fingerprint\":${event["fingerprint"]},\"secretId\":${event["secretId"]},\"revision\":${event["revision"]},\"secretType\":${event["secretType"]},\"encryptedProfile\":${event["encryptedProfile"]},\"envelope\":${event["envelope"]},\"deleted\":${event["deleted"]},\"createdAt\":\"2030-01-01T00:00:00Z\"}"
+        "{\"serverSequence\":$sequence,\"eventId\":${event["eventId"]},\"fingerprint\":${event["fingerprint"]},\"secretId\":${event["secretId"]},\"revision\":${event["revision"]},\"secretType\":${event["secretType"]},\"encryptedProfile\":${event["encryptedProfile"]},\"envelope\":${event["envelope"]},\"deleted\":${event["deleted"]},\"contentKey\":${event["contentKey"]},\"createdAt\":\"2030-01-01T00:00:00Z\"}"
 
     private class TestServer(private val server: HttpServer) : AutoCloseable {
         val baseUrl = "http://127.0.0.1:${server.address.port}"

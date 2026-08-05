@@ -180,7 +180,7 @@ internal fun KeysteadAppShell(
                         destination == KeysteadDestination.BACKUP ->
                             CenteredScrollContent(maxWidth = 560.dp) { backupContent() }
                         destination == KeysteadDestination.SYNC ->
-                            CenteredScrollContent(maxWidth = 760.dp) { syncContent() }
+                            CenteredScrollContent(maxWidth = 1100.dp) { syncContent() }
                         destination == KeysteadDestination.SECRETS ->
                             SecretsArea(
                                 layoutMode = layoutMode,

@@ -26,6 +26,7 @@ import top.focess.keystead.service.FullVaultBackupService
 import top.focess.keystead.service.DeviceVaultKeyPackage
 import top.focess.keystead.service.SyncImportConflict
 import top.focess.keystead.service.SyncImportRejection
+import top.focess.keystead.service.SyncImportRejectionReason
 import top.focess.keystead.service.VaultHandle
 import top.focess.keystead.store.VaultFileFormat
 
@@ -382,6 +383,7 @@ class LocalVaultSession private constructor(
                     encryptedProfile = record.encryptedProfile(),
                     envelope = record.envelope(),
                     deleted = record.deleted(),
+                    contentKey = record.contentKey(),
                 )
             client.appendPersonalRecord(
                 unsigned.copy(eventId = PersonalRecordEventId.of(unsigned)),
@@ -402,9 +404,20 @@ class LocalVaultSession private constructor(
         val rejected = mutableListOf<SyncImportRejection>()
         do {
             val page = client.listPersonalRecordPage(cursor, syncPageLimit)
+            // Legacy pre-KVE2 events carry no content key and can never verify; reject
+            // them individually instead of failing the whole page.
+            val (legacy, current) = page.records.partition { it.contentKey.isBlank() }
+            legacy.forEach { record ->
+                rejected +=
+                    SyncImportRejection(
+                        record.secretId,
+                        record.revision,
+                        SyncImportRejectionReason.UNVERIFIABLE,
+                    )
+            }
             val report =
                 handle.importRecordsWithReport(
-                    page.records.map { record ->
+                    current.map { record ->
                         EncryptedSyncRecord(
                             record.fingerprint,
                             record.secretId,
@@ -413,6 +426,7 @@ class LocalVaultSession private constructor(
                             record.encryptedProfile,
                             record.envelope,
                             record.deleted,
+                            record.contentKey,
                         )
                     },
                 )

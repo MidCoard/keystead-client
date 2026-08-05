@@ -78,12 +78,18 @@ fun main() = application {
                 )
             onDispose {}
         }
-        top.focess.keystead.client.ui.KeysteadTheme {
-            androidx.compose.material3.Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = androidx.compose.material3.MaterialTheme.colorScheme.background,
-            ) {
-                KeysteadClientApp(windowHandle = { WinDef.HWND(Native.getWindowPointer(window)) })
+        val systemClipboard = androidx.compose.ui.platform.LocalClipboard.current
+        val retryingClipboard = remember { RetryingClipboard(systemClipboard) }
+        CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalClipboard provides retryingClipboard
+        ) {
+            top.focess.keystead.client.ui.KeysteadTheme {
+                androidx.compose.material3.Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.background,
+                ) {
+                    KeysteadClientApp(windowHandle = { WinDef.HWND(Native.getWindowPointer(window)) })
+                }
             }
         }
     }

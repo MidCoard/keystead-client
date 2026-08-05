@@ -15,6 +15,7 @@ data class PersonalVaultRecordEvent(
     val encryptedProfile: String,
     val envelope: String,
     val deleted: Boolean,
+    val contentKey: String,
 )
 
 data class PersonalVaultRecord(
@@ -27,6 +28,7 @@ data class PersonalVaultRecord(
     val encryptedProfile: String,
     val envelope: String,
     val deleted: Boolean,
+    val contentKey: String,
     val createdAt: Instant,
 )
 
@@ -62,6 +64,7 @@ object PersonalRecordEventId {
                 event.encryptedProfile,
                 event.envelope,
                 event.deleted,
+                event.contentKey,
             ),
         )
 }
@@ -132,7 +135,7 @@ fun KeysteadServerClient.deletePersonalRecordHistory(
 }
 
 private fun PersonalVaultRecordEvent.toJson(): String =
-    "{\"eventId\":\"${eventId.personalRecordJson()}\",\"fingerprint\":\"${fingerprint.personalRecordJson()}\",\"secretId\":\"${secretId.personalRecordJson()}\",\"revision\":$revision,\"secretType\":\"${secretType.personalRecordJson()}\",\"encryptedProfile\":\"${encryptedProfile.personalRecordJson()}\",\"envelope\":\"${envelope.personalRecordJson()}\",\"deleted\":$deleted}"
+    "{\"eventId\":\"${eventId.personalRecordJson()}\",\"fingerprint\":\"${fingerprint.personalRecordJson()}\",\"secretId\":\"${secretId.personalRecordJson()}\",\"revision\":$revision,\"secretType\":\"${secretType.personalRecordJson()}\",\"encryptedProfile\":\"${encryptedProfile.personalRecordJson()}\",\"envelope\":\"${envelope.personalRecordJson()}\",\"deleted\":$deleted,\"contentKey\":\"${contentKey.personalRecordJson()}\"}"
 
 private fun requirePersonalRecordSuccess(response: ServerExchange) {
     if (response.statusCode in 200..299) return
@@ -189,6 +192,8 @@ private fun parsePersonalRecord(body: String): PersonalVaultRecord {
             encryptedProfile = value.string("encryptedProfile"),
             envelope = value.string("envelope"),
             deleted = value.boolean("deleted"),
+            // Legacy pre-KVE2 events carry an empty content key; keep it as-is.
+            contentKey = value.string("contentKey"),
             createdAt = Instant.parse(value.string("createdAt")),
         )
     } catch (error: IllegalStateException) {

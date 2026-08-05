@@ -19,7 +19,7 @@ class PersonalVaultSyncTest {
         withServer { exchange ->
             val request = JsonParser.parseString(exchange.requestBody.bufferedReader().readText()).asJsonObject
             uploadedIds += request["secretId"].asString
-            "{\"serverSequence\":1,\"eventId\":${request["eventId"]},\"fingerprint\":${request["fingerprint"]},\"secretId\":${request["secretId"]},\"revision\":${request["revision"]},\"secretType\":${request["secretType"]},\"encryptedProfile\":${request["encryptedProfile"]},\"envelope\":${request["envelope"]},\"deleted\":${request["deleted"]},\"createdAt\":\"2030-01-01T00:00:00Z\"}"
+            "{\"serverSequence\":1,\"eventId\":${request["eventId"]},\"fingerprint\":${request["fingerprint"]},\"secretId\":${request["secretId"]},\"revision\":${request["revision"]},\"secretType\":${request["secretType"]},\"encryptedProfile\":${request["encryptedProfile"]},\"envelope\":${request["envelope"]},\"deleted\":${request["deleted"]},\"contentKey\":${request["contentKey"]},\"createdAt\":\"2030-01-01T00:00:00Z\"}"
         }.use { server ->
             LocalVaultSession.openOrCreate(
                 root.resolve("selective.kvault"),
@@ -69,14 +69,14 @@ class PersonalVaultSyncTest {
             if (exchange.requestMethod == "POST") {
                 val request = JsonParser.parseString(exchange.requestBody.bufferedReader().readText()).asJsonObject
                 val response =
-                    "{\"serverSequence\":1,\"eventId\":${request["eventId"]},\"fingerprint\":${request["fingerprint"]},\"secretId\":${request["secretId"]},\"revision\":${request["revision"]},\"secretType\":${request["secretType"]},\"encryptedProfile\":${request["encryptedProfile"]},\"envelope\":${request["envelope"]},\"deleted\":${request["deleted"]},\"createdAt\":\"${Instant.parse("2030-01-01T00:00:00Z")}\"}"
+                    "{\"serverSequence\":1,\"eventId\":${request["eventId"]},\"fingerprint\":${request["fingerprint"]},\"secretId\":${request["secretId"]},\"revision\":${request["revision"]},\"secretType\":${request["secretType"]},\"encryptedProfile\":${request["encryptedProfile"]},\"envelope\":${request["envelope"]},\"deleted\":${request["deleted"]},\"contentKey\":${request["contentKey"]},\"createdAt\":\"${Instant.parse("2030-01-01T00:00:00Z")}\"}"
                 appended.set(JsonObjectResponse(response))
                 response
             } else {
                 val valid = appended.get().body
                 val parsed = JsonParser.parseString(valid).asJsonObject
                 val bogus =
-                    "{\"serverSequence\":2,\"eventId\":\"bogus\",\"fingerprint\":${parsed["fingerprint"]},\"secretId\":\"550e8400-e29b-41d4-a716-446655440000\",\"revision\":999,\"secretType\":\"LOGIN_PASSWORD\",\"encryptedProfile\":\"not-authentic\",\"envelope\":\"not-authentic\",\"deleted\":false,\"createdAt\":\"2030-01-01T00:00:01Z\"}"
+                    "{\"serverSequence\":2,\"eventId\":\"bogus\",\"fingerprint\":${parsed["fingerprint"]},\"secretId\":\"550e8400-e29b-41d4-a716-446655440000\",\"revision\":999,\"secretType\":\"LOGIN_PASSWORD\",\"encryptedProfile\":\"not-authentic\",\"envelope\":\"not-authentic\",\"deleted\":false,\"contentKey\":\"not-authentic\",\"createdAt\":\"2030-01-01T00:00:01Z\"}"
                 "{\"afterSequence\":0,\"records\":[$valid,$bogus],\"highestSequence\":2,\"hasMore\":false,\"nextSequence\":null}"
             }
         }.use { server ->

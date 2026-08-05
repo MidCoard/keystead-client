@@ -93,8 +93,8 @@ internal fun SharePanel(
 
         CapabilityGroupLabel(
             strings.groupMintShare,
-            strings.serverRequired,
-            serverAvailable,
+            strings.loginRequired,
+            serverAvailable && authenticated,
         )
         OutlinedTextField(
             title,
@@ -260,8 +260,8 @@ internal fun SharePanel(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             CapabilityGroupLabel(
                 strings.groupYourShares,
-                strings.serverRequired,
-                serverAvailable,
+                strings.loginRequired,
+                serverAvailable && authenticated,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(

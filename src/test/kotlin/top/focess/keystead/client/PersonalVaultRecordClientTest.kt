@@ -23,10 +23,14 @@ class PersonalVaultRecordClientTest {
                 encryptedProfile = "profile",
                 envelope = "payload",
                 deleted = false,
+                contentKey = "content-key",
             )
 
         assertEquals(PersonalRecordEventId.of(event), PersonalRecordEventId.of(event.copy(eventId = "else")))
-        assertNotEquals(PersonalRecordEventId.of(event), PersonalRecordEventId.of(event.copy(envelope = "changed")))
+        // KVE2 event ids hash the identity fields plus the content key, not the envelope
+        // ciphertext; genuinely different content means a different content key.
+        assertEquals(PersonalRecordEventId.of(event), PersonalRecordEventId.of(event.copy(envelope = "changed")))
+        assertNotEquals(PersonalRecordEventId.of(event), PersonalRecordEventId.of(event.copy(contentKey = "changed")))
         assertNotEquals(PersonalRecordEventId.of(event), PersonalRecordEventId.of(event.copy(deleted = true, envelope = "")))
     }
 
@@ -36,7 +40,7 @@ class PersonalVaultRecordClientTest {
         val uri = AtomicReference("")
         val body = AtomicReference("")
         val response =
-            """{"serverSequence":1,"eventId":"event-1","fingerprint":"6000000000000001","secretId":"550e8400-e29b-41d4-a716-446655440000","revision":1,"secretType":"LOGIN_PASSWORD","encryptedProfile":"profile","envelope":"payload","deleted":false,"createdAt":"2030-01-01T00:00:00Z"}"""
+            """{"serverSequence":1,"eventId":"event-1","fingerprint":"6000000000000001","secretId":"550e8400-e29b-41d4-a716-446655440000","revision":1,"secretType":"LOGIN_PASSWORD","encryptedProfile":"profile","envelope":"payload","deleted":false,"contentKey":"content-key","createdAt":"2030-01-01T00:00:00Z"}"""
         withServer(response) { exchange ->
             method.set(exchange.requestMethod)
             uri.set(exchange.requestURI.toString())
@@ -54,6 +58,7 @@ class PersonalVaultRecordClientTest {
                             encryptedProfile = "profile",
                             envelope = "payload",
                             deleted = false,
+                            contentKey = "content-key",
                         ),
                     )
             assertEquals(1, appended.serverSequence)
@@ -117,6 +122,7 @@ class PersonalVaultRecordClientTest {
                                 encryptedProfile = "profile",
                                 envelope = "payload",
                                 deleted = false,
+                                contentKey = "content-key",
                             ),
                         )
                 }
@@ -182,5 +188,5 @@ class PersonalVaultRecordClientTest {
     }
 
     private fun recordJson(sequence: Long): String =
-        """{"serverSequence":$sequence,"eventId":"event-$sequence","fingerprint":"6000000000000001","secretId":"secret-$sequence","revision":$sequence,"secretType":"SECURE_NOTE","encryptedProfile":"profile-$sequence","envelope":"payload-$sequence","deleted":false,"createdAt":"2030-01-01T00:00:0${sequence}Z"}"""
+        """{"serverSequence":$sequence,"eventId":"event-$sequence","fingerprint":"6000000000000001","secretId":"secret-$sequence","revision":$sequence,"secretType":"SECURE_NOTE","encryptedProfile":"profile-$sequence","envelope":"payload-$sequence","deleted":false,"contentKey":"content-$sequence","createdAt":"2030-01-01T00:00:0${sequence}Z"}"""
 }

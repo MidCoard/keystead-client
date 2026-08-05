@@ -245,6 +245,8 @@ internal interface Strings {
     val connectedOfflineHelp: String
     val checkAgain: String
     val serverRequired: String
+    val loginRequired: String
+    val syncNotSignedInHelp: String
     val worksOffline: String
     val groupServerSignIn: String
     val groupVaultsAndSync: String
@@ -278,6 +280,7 @@ internal interface Strings {
     val selectAllRecords: String
     val clearRecordSelection: String
     fun selectedRecordSummary(selected: Int, uploadable: Int, removable: Int): String
+    fun selectedUploadSummary(selected: Int, uploadable: Int): String
     fun uploadSelectedRecords(count: Int): String
     fun removeSelectedServerCopies(count: Int): String
     fun uploadedSelectedRecords(count: Int): String
@@ -287,6 +290,16 @@ internal interface Strings {
     val serverRecordHistory: String
     val historyRemoveHelp: String
     val recordIdentifierHash: String
+    val clientSidePane: String
+    val serverSidePane: String
+    val revisionLabel: String
+    val recordStateLabel: String
+    fun recordStateValue(deleted: Boolean?): String
+    val localBadge: String
+    val serverBadge: String
+    val otherVaultBadge: String
+    val uploadRecord: String
+    val removeServerCopy: String
     val localContentHash: String
     val serverComputedContentHash: String
     val serverAdvertisedContentHash: String

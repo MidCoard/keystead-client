@@ -389,6 +389,8 @@ internal object ZhStrings : Strings {
     override val connectedOfflineHelp = "服务器不可用。请检查服务器地址或启动服务器，然后重试。"
     override val checkAgain = "重新检查"
     override val serverRequired = "需要服务器"
+    override val loginRequired = "需要登录"
+    override val syncNotSignedInHelp = "请先在“账户”页面登录，再拉取、上传和比较加密 records。"
     override val worksOffline = "可离线使用"
     override val groupServerSignIn = "服务器登录"
     override val groupVaultsAndSync = "保险库与同步"
@@ -424,6 +426,8 @@ internal object ZhStrings : Strings {
     override val clearRecordSelection = "清除选择"
     override fun selectedRecordSummary(selected: Int, uploadable: Int, removable: Int) =
         "已选 $selected 条 · $uploadable 条可上传 · $removable 条存在服务器副本"
+    override fun selectedUploadSummary(selected: Int, uploadable: Int) =
+        "已选 $selected 条 · $uploadable 条可上传"
     override fun uploadSelectedRecords(count: Int) = "上传所选（$count）"
     override fun removeSelectedServerCopies(count: Int) = "移除服务器副本（$count）"
     override fun uploadedSelectedRecords(count: Int) =
@@ -436,6 +440,21 @@ internal object ZhStrings : Strings {
     override val historyRemoveHelp =
         "勾选任一事件即选中整条记录。移除将删除所选记录的全部服务器事件；本地记录保持不变。"
     override val recordIdentifierHash = "记录标识哈希"
+    override val clientSidePane = "本机（本地）"
+    override val serverSidePane = "服务器"
+    override val revisionLabel = "修订版本"
+    override val recordStateLabel = "状态"
+    override fun recordStateValue(deleted: Boolean?) =
+        when (deleted) {
+            null -> "不存在"
+            true -> "已删除"
+            false -> "有效"
+        }
+    override val localBadge = "本机"
+    override val serverBadge = "服务器"
+    override val otherVaultBadge = "其他保险库"
+    override val uploadRecord = "上传"
+    override val removeServerCopy = "移除服务器副本"
     override val localContentHash = "本地事件哈希"
     override val serverComputedContentHash = "服务器事件哈希（本机计算）"
     override val serverAdvertisedContentHash = "服务器事件哈希（服务器声明）"
