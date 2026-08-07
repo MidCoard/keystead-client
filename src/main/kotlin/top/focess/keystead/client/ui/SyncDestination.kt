@@ -62,9 +62,10 @@ internal fun SyncPanel(
         }
 
         CapabilityGroupLabel(strings.groupVaultsAndSync, strings.loginRequired, serverReady)
+        val vaultMismatch = recordInventory?.vaultMismatch == true
         Button(
             onClick = onPull,
-            enabled = vaultOpen && serverReady,
+            enabled = vaultOpen && serverReady && !vaultMismatch,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(strings.pull)

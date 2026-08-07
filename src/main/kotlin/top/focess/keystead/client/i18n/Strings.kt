@@ -273,6 +273,12 @@ internal interface Strings {
     val push: String
     val pull: String
     val pullAndRetry: String
+    val pullConfirmTitle: String
+    val pullConfirmMessage: String
+    val compareSyncTitle: String
+    val compareSyncEmpty: String
+    val compareAcceptSelected: String
+    val compareAcceptAll: String
     val pullLatest: String
     val recordInventory: String
     val refreshRecordInventory: String

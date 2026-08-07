@@ -22,6 +22,9 @@ import top.focess.keystead.model.KeyId
 import top.focess.keystead.service.CreateVaultRequest
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.EncryptedSyncRecord
+import top.focess.keystead.service.SyncImportReport
+import top.focess.keystead.service.SyncPayloadView
+import top.focess.keystead.service.SyncRecordPreview
 import top.focess.keystead.service.FullVaultBackupService
 import top.focess.keystead.service.DeviceVaultKeyPackage
 import top.focess.keystead.service.SyncImportConflict
@@ -231,8 +234,8 @@ class LocalVaultSession private constructor(
 
     fun listLogins(): List<LoginListItem> =
         handle.listSecrets()
-            .filter { it.type() == SecretType.LOGIN_PASSWORD }
-            .map { LoginListItem(it.id().value().toString(), it.title()) }
+            .filter { it.secretType() == SecretType.LOGIN_PASSWORD }
+            .map { LoginListItem(it.secretId().value().toString(), it.title()) }
 
     fun addStructuredSecret(
         type: SecretType,
@@ -290,9 +293,9 @@ class LocalVaultSession private constructor(
         handle.listSecrets()
             .map {
                 SecretListItem(
-                    id = it.id().value().toString(),
+                    id = it.secretId().value().toString(),
                     title = it.title(),
-                    type = it.type().name,
+                    type = it.secretType().name,
                     category = it.classification().category(),
                     provider = it.classification().provider(),
                     software = it.classification().software(),
@@ -328,8 +331,8 @@ class LocalVaultSession private constructor(
     }
 
     fun editSnapshot(secretId: String): SecretEditSnapshot {
-        val metadata = handle.listSecrets().first { it.id().value().toString() == secretId }
-        return if (metadata.type() == SecretType.LOGIN_PASSWORD) {
+        val metadata = handle.listSecrets().first { it.secretId().value().toString() == secretId }
+        return if (metadata.secretType() == SecretType.LOGIN_PASSWORD) {
             loginEditSnapshot(secretId)
         } else {
             structuredEditSnapshot(secretId)
@@ -356,6 +359,78 @@ class LocalVaultSession private constructor(
 
     internal fun currentPersonalRecords(): List<EncryptedSyncRecord> =
         handle.exportRecordsSince(0)
+
+    fun previewSyncRecordFields(record: EncryptedSyncRecord): Map<String, String>? {
+        var captured: Map<String, String>? = null
+        try {
+            handle.previewSyncRecord(record) { preview ->
+                when (preview) {
+                    is SyncRecordPreview.Deleted -> captured = mapOf("deleted" to "true")
+                    is SyncRecordPreview.Active ->
+                        captured = captureActivePayload(preview.metadata().title(), preview.payload())
+                }
+            }
+        } catch (_: Exception) {
+            captured = null
+        }
+        return captured
+    }
+
+    fun localRecordFields(secretId: String): Map<String, String> {
+        val metadata =
+            handle.listSecrets().firstOrNull { it.secretId().value().toString() == secretId }
+                ?: return emptyMap()
+        val fields = LinkedHashMap<String, String>()
+        fields["title"] = metadata.title()
+        try {
+            val id = SecretId(UUID.fromString(secretId))
+            when (metadata.secretType()) {
+                SecretType.LOGIN_PASSWORD ->
+                    handle.withLogin(id) { view ->
+                        view.url().ifPresent { fields["url"] = it }
+                        view.withUsername { fields["username"] = String(it) }
+                        view.withPassword { fields["password"] = String(it) }
+                        view.withNotes { fields["notes"] = String(it) }
+                    }
+                SecretType.SECURE_NOTE ->
+                    handle.withSecureNote(id) { view ->
+                        view.withBody { fields["body"] = String(it) }
+                    }
+                else ->
+                    handle.withSecret(id) { view ->
+                        view.orderedFieldNames().forEach { name ->
+                            view.withField(name) { fields[name] = String(it) }
+                        }
+                    }
+            }
+        } catch (_: Exception) {
+            // Local record missing or undecodable; return the fields captured so far.
+        }
+        return fields
+    }
+
+    fun importSelectedSyncRecords(records: List<EncryptedSyncRecord>): SyncImportReport =
+        handle.importRecordsWithReport(records)
+
+    private fun captureActivePayload(title: String, payload: SyncPayloadView): Map<String, String> {
+        val fields = LinkedHashMap<String, String>()
+        fields["title"] = title
+        when (payload) {
+            is SyncPayloadView.Login -> {
+                payload.view().url().ifPresent { fields["url"] = it }
+                payload.view().withUsername { fields["username"] = String(it) }
+                payload.view().withPassword { fields["password"] = String(it) }
+                payload.view().withNotes { fields["notes"] = String(it) }
+            }
+            is SyncPayloadView.Note -> payload.view().withBody { fields["body"] = String(it) }
+            is SyncPayloadView.Structured -> {
+                payload.view().orderedFieldNames().forEach { name ->
+                    payload.view().withField(name) { fields[name] = String(it) }
+                }
+            }
+        }
+        return fields
+    }
 
     fun pushPendingPersonalRecordsTo(
         client: KeysteadServerClient,
@@ -501,7 +576,7 @@ class LocalVaultSession private constructor(
         handle.withSecret(SecretId(UUID.fromString(secretId))) { view ->
             val metadata = view.metadata()
             title = metadata.title()
-            type = metadata.type().name
+            type = metadata.secretType().name
             category = metadata.classification().category()
             provider = metadata.classification().provider()
             software = metadata.classification().software()

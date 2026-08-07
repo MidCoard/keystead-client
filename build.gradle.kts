@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "top.focess"
-version = "0.4.3-SNAPSHOT"
+version = "0.5.0"
 
 kotlin {
     jvmToolchain(25)
@@ -18,7 +18,7 @@ kotlin {
 }
 
 dependencies {
-    implementation("top.focess:keystead-core:0.4.5")
+    implementation("top.focess:keystead-core:0.5.1")
     implementation(compose.desktop.currentOs)
     implementation("org.jetbrains.compose.material3:material3:1.9.0")
     implementation("org.jetbrains.compose.material:material-icons-core:1.7.3")
@@ -80,7 +80,7 @@ compose.desktop {
             // publishing is deferred until the project reaches a 1.0 standard
             // release where all platforms can share one version. Re-add Dmg (and
             // the macos matrix leg in release.yml) at that point. Bump per release.
-            packageVersion = "0.4.2"
+            packageVersion = "0.5.0"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first

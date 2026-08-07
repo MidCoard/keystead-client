@@ -434,6 +434,13 @@ internal object EnStrings : Strings {
     override val push = "Push"
     override val pull = "Pull"
     override val pullAndRetry = "Pull and retry"
+    override val pullConfirmTitle = "Pull server records?"
+    override val pullConfirmMessage =
+        "Imports new server records into this vault. Records encrypted under another vault's key are rejected."
+    override val compareSyncTitle = "Compare and sync"
+    override val compareSyncEmpty = "No server records to compare."
+    override val compareAcceptSelected = "Accept selected"
+    override val compareAcceptAll = "Accept all"
     override val pullLatest = "Pull latest"
     override val recordInventory = "Server record inventory"
     override val refreshRecordInventory = "Refresh record inventory"

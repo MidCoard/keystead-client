@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,7 +45,11 @@ import top.focess.keystead.client.ui.ServerRecoveryHub
 import top.focess.keystead.client.ui.VaultAccessApprovalPanel
 import top.focess.keystead.client.ui.SharePanel
 import top.focess.keystead.client.ui.SettingsPanel
+import top.focess.keystead.client.ui.SyncCompareDialog
+import top.focess.keystead.client.ui.SyncComparisonItem
 import top.focess.keystead.client.ui.SyncPanel
+import top.focess.keystead.client.ui.buildSyncDiff
+import top.focess.keystead.client.ui.toEncryptedSyncRecord
 import top.focess.keystead.model.SecretType
 import top.focess.keystead.share.ShareContents
 
@@ -145,6 +150,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     val destructiveGate = remember { ConfirmationGate<DestructiveConfirmation>() }
     var conflictAssessment by remember { mutableStateOf<ConflictAssessment?>(null) }
     var recordInventory by remember { mutableStateOf<PersonalVaultRecordInventory?>(null) }
+    var serverRecords by remember { mutableStateOf<List<PersonalVaultRecord>>(emptyList()) }
     var secretType by remember { mutableStateOf(SecretType.LOGIN_PASSWORD) }
     var title by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
@@ -231,6 +237,9 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         mutableStateOf(BackupRestoreSelection(source = null, target = null))
     }
     var pendingBackupRestore by remember { mutableStateOf<BackupRestoreSelection?>(null) }
+    var pendingPull by remember { mutableStateOf(false) }
+    var pendingSyncComparison by remember { mutableStateOf<List<SyncComparisonItem>?>(null) }
+    val syncAccept = remember { mutableStateMapOf<String, Boolean>() }
     var serverRestoreTarget by remember { mutableStateOf(vaultDirectory) }
     var serverRestoreNewMasterPassphrase by remember { mutableStateOf("") }
     var serverRestoreNewMasterPassphraseConfirmation by remember { mutableStateOf("") }
@@ -536,6 +545,8 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         inspectorSheetOpen = false
         actionFeedbackState.info(nextStatus)
         recordInventory = null
+        pendingSyncComparison = null
+        syncAccept.clear()
         unlockError = null
     }
 
@@ -645,10 +656,12 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
 
     fun loadRecordInventory() {
         val current = session
+        val remote = serverClient().listAllPersonalRecords()
+        serverRecords = remote
         recordInventory =
             PersonalVaultRecordInventory.compare(
                 localRecords = current?.currentPersonalRecords(),
-                remoteRecords = serverClient().listAllPersonalRecords(),
+                remoteRecords = remote,
                 localFingerprint = current?.fingerprintValue(),
             )
     }
@@ -838,6 +851,81 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                 actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
             }
             refresh(current)
+        }
+    }
+
+    fun performPull() {
+        val current = session ?: return
+        runAction(serverAction = true) {
+            val state = syncStateStore()
+            val pulled = current.pullPendingPersonalRecordsFrom(serverClient(), state)
+            conflictAssessment = null
+            loadRecordInventory()
+            status =
+                strings.pulledRecords(
+                    pulled.imported,
+                    state.lastPulledServerSequence(fingerprint).toString(),
+                )
+            if (pulled.rejected.isNotEmpty()) {
+                actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
+            }
+            refresh(current)
+            loadRecordInventory()
+        }
+    }
+
+    fun prepareSyncComparison() {
+        val current = session ?: return
+        val inventory = recordInventory
+        val remote = serverRecords
+        val comparisons = inventory?.comparisons
+        if (inventory == null || comparisons == null) return
+        runAction(serverAction = true) {
+            val items =
+                comparisons
+                    .filter {
+                        it.status == RecordComparisonStatus.SERVER_NEWER ||
+                            it.status == RecordComparisonStatus.SERVER_ONLY
+                    }
+                    .mapNotNull { entry ->
+                        val serverPvr =
+                            remote
+                                .filter { it.secretId == entry.secretId }
+                                .maxWith(compareBy<PersonalVaultRecord> { it.revision }.thenBy { it.serverSequence })
+                                ?: return@mapNotNull null
+                        val serverRecord = serverPvr.toEncryptedSyncRecord()
+                        val serverFields =
+                            current.previewSyncRecordFields(serverRecord) ?: return@mapNotNull null
+                        val localFields = current.localRecordFields(entry.secretId)
+                        SyncComparisonItem(
+                            secretId = entry.secretId,
+                            title = serverFields["title"] ?: localFields["title"] ?: entry.secretId,
+                            secretType = entry.secretType,
+                            status = entry.status,
+                            fields = buildSyncDiff(localFields, serverFields),
+                            serverRecord = serverRecord,
+                        )
+                    }
+            syncAccept.clear()
+            items.forEach { syncAccept[it.secretId] = false }
+            pendingSyncComparison = items
+        }
+    }
+
+    fun performAcceptSync(items: List<SyncComparisonItem>) {
+        val current = session
+        pendingSyncComparison = null
+        syncAccept.clear()
+        if (items.isEmpty() || current == null) return
+        runAction(serverAction = true) {
+            val report = current.importSelectedSyncRecords(items.map { it.serverRecord })
+            conflictAssessment = null
+            status = strings.pulledRecords(report.imported, report.imported.toString())
+            if (report.rejected.isNotEmpty()) {
+                actionFeedbackState.error(strings.rejectedServerRecords(report.rejected.size))
+            }
+            refresh(current)
+            loadRecordInventory()
         }
     }
 
@@ -1374,25 +1462,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                     )
                 }
             },
-            onPull = {
-                val current = session ?: return@SyncPanel
-                runAction(serverAction = true) {
-                    val state = syncStateStore()
-                    val pulled = current.pullPendingPersonalRecordsFrom(serverClient(), state)
-                    conflictAssessment = null
-                    loadRecordInventory()
-                    status =
-                        strings.pulledRecords(
-                            pulled.imported,
-                            state.lastPulledServerSequence(fingerprint).toString(),
-                        )
-                    if (pulled.rejected.isNotEmpty()) {
-                        actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
-                    }
-                    refresh(current)
-                    loadRecordInventory()
-                }
-            },
+            onPull = { prepareSyncComparison() },
             onRefreshRecords = {
                 runAction(serverAction = true) {
                     loadRecordInventory()
@@ -2107,6 +2177,27 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                     androidx.compose.material3.Text(strings.cancel)
                 }
             },
+        )
+    }
+    val pendingComparison = pendingSyncComparison
+    if (pendingComparison != null) {
+        SyncCompareDialog(
+            items = pendingComparison,
+            accept = syncAccept,
+            onAcceptChange = { id, value -> syncAccept[id] = value },
+            onAcceptAll = {
+                val all = pendingComparison
+                all.forEach { syncAccept[it.secretId] = true }
+                performAcceptSync(all)
+            },
+            onAcceptSelected = {
+                performAcceptSync(pendingComparison.filter { syncAccept[it.secretId] == true })
+            },
+            onCancel = {
+                pendingSyncComparison = null
+                syncAccept.clear()
+            },
+            strings = strings,
         )
     }
     val restoreToConfirm = pendingBackupRestore

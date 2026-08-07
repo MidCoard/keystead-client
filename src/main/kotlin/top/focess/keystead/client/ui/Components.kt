@@ -129,27 +129,19 @@ fun CapabilityGroupLabel(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GroupLabel(value)
-        Surface(
-            color =
-                if (available) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.tertiaryContainer
-                },
-            shape = CircleShape,
-        ) {
-            Text(
-                capability,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                color =
-                    if (available) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onTertiaryContainer
-                    },
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
+        if (!available) {
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                shape = CircleShape,
+            ) {
+                Text(
+                    capability,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
     }
 }
