@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "top.focess"
-version = "0.5.0"
+version = "1.0.0"
 
 kotlin {
     jvmToolchain(25)
@@ -68,19 +68,15 @@ compose.desktop {
         mainClass = "top.focess.keystead.client.MainKt"
         jvmArgs += "--sun-misc-unsafe-memory-access=allow"
         nativeDistributions {
-            targetFormats(TargetFormat.Msi, TargetFormat.Deb)
+            targetFormats(TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Dmg)
             packageName = "Keystead"
             // The packaged image is produced with jlink. HttpClient is loaded by
             // the server clients at runtime, so static module discovery does not
             // reliably include it in the minimized JRE.
             modules("java.net.http")
-            // Installer version mirrors the project release version (0.4.1).
-            // macOS DMG is intentionally NOT built: jpackage's Dmg packager
-            // requires MAJOR > 0, so it cannot match a 0.x release version. macOS
-            // publishing is deferred until the project reaches a 1.0 standard
-            // release where all platforms can share one version. Re-add Dmg (and
-            // the macos matrix leg in release.yml) at that point. Bump per release.
-            packageVersion = "0.5.0"
+            // Installer version mirrors the project release version. Bump per release.
+            // macOS DMG requires MAJOR > 0; the project is now 1.x so Dmg is built.
+            packageVersion = "1.0.0"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first
