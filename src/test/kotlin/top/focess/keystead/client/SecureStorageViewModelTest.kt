@@ -1,4 +1,5 @@
 package top.focess.keystead.client
+import top.focess.keystead.client.ClientSettingsStore
 
 import java.nio.file.Files
 import kotlin.test.Test
@@ -11,7 +12,7 @@ class SecureStorageViewModelTest {
     @Test
     fun successfulCheckDoesNotImplicitlySelectBiometricStorage() {
         val directory = Files.createTempDirectory("keystead-storage-vm")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        val settings = SecureStorageSettings(ClientSettingsStore(directory.resolve("selection.properties")), false)
         val storage = MemorySecureStorage()
         val viewModel =
             SecureStorageViewModel(
@@ -34,7 +35,7 @@ class SecureStorageViewModelTest {
     @Test
     fun persistedBiometricSelectionActivatesAvailableStorage() {
         val directory = Files.createTempDirectory("keystead-storage-biometric")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        val settings = SecureStorageSettings(ClientSettingsStore(directory.resolve("selection.properties")), false)
         settings.save(PersistedSecureStorageSelection(SecureStorageMode.BIOMETRIC, "windows-hello"))
         val storage = MemorySecureStorage()
         val viewModel =
@@ -53,7 +54,7 @@ class SecureStorageViewModelTest {
     @Test
     fun recheckDoesNotCloseAlreadyActiveStorage() {
         val directory = Files.createTempDirectory("keystead-storage-recheck")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        val settings = SecureStorageSettings(ClientSettingsStore(directory.resolve("selection.properties")), false)
         settings.save(PersistedSecureStorageSelection(SecureStorageMode.BIOMETRIC, "windows-hello"))
         val storage = CloseTrackingStorage()
         var checks = 0
@@ -84,7 +85,7 @@ class SecureStorageViewModelTest {
     @Test
     fun memoryFallbackSelectionRemainsAvailable() {
         val directory = Files.createTempDirectory("keystead-storage-fallback")
-        val settings = SecureStorageSettings(directory.resolve("selection.properties"))
+        val settings = SecureStorageSettings(ClientSettingsStore(directory.resolve("selection.properties")), false)
         val viewModel = unavailableViewModel(settings)
         viewModel.initialize(directory, "desktop")
 

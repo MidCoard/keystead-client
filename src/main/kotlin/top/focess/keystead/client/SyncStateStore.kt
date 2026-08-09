@@ -2,6 +2,8 @@ package top.focess.keystead.client
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.Properties
 
 class SyncStateStore(private val directory: Path) {
@@ -23,10 +25,7 @@ class SyncStateStore(private val directory: Path) {
         val current = properties.getProperty(key)?.toLongOrNull() ?: 0L
         if (sequence < current) return
         properties.setProperty(key, sequence.toString())
-        Files.createDirectories(directory)
-        Files.newOutputStream(stateFile).use { output ->
-            properties.store(output, "Keystead sync state")
-        }
+        persist(properties)
     }
 
     private fun revision(fingerprint: String, direction: String): Long =
@@ -40,10 +39,16 @@ class SyncStateStore(private val directory: Path) {
             return
         }
         properties.setProperty(key(fingerprint, direction), revision.toString())
+        persist(properties)
+    }
+
+    private fun persist(properties: Properties) {
         Files.createDirectories(directory)
-        Files.newOutputStream(stateFile).use { output ->
+        val temporary = stateFile.resolveSibling(".${stateFile.fileName}.tmp")
+        Files.newOutputStream(temporary).use { output ->
             properties.store(output, "Keystead sync state")
         }
+        Files.move(temporary, stateFile, ATOMIC_MOVE, REPLACE_EXISTING)
     }
 
     private fun load(): Properties {

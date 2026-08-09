@@ -249,6 +249,12 @@ internal object EnStrings : Strings {
     override val settingsTitle = "Settings"
     override val settingsIntro =
         "Device storage and session details. Vaults are local encrypted files; the server only ever sees encrypted records and fingerprints."
+    override val configLocationLabel = "Config storage"
+    override val configLocationHelp =
+        "Choose where settings (language, server, storage) are stored."
+    override val configLocationGlobal = "Client home"
+    override val configLocationVaultLocal = "Vault path"
+    override fun configLocationPath(path: String) = "Active config file: $path"
     override val groupSession = "Session"
     override val groupAbout = "About"
     override val groupLanguage = "Language"

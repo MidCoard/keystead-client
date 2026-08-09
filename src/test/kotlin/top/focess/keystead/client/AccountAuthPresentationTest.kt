@@ -21,7 +21,7 @@ class AccountAuthPresentationTest {
         assertTrue(
             AccountAuthPresentation.canSubmit(
                 mode = AccountAuthMode.SIGN_IN,
-                serverUrl = "http://localhost:8080",
+                serverUrl = "http://localhost:22144",
                 username = "alice",
                 password = "secret",
                 passwordConfirmation = "",
@@ -32,7 +32,7 @@ class AccountAuthPresentationTest {
         assertFalse(
             AccountAuthPresentation.canSubmit(
                 AccountAuthMode.SIGN_IN,
-                "http://localhost:8080",
+                "http://localhost:22144",
                 "alice",
                 "secret",
                 "",
@@ -47,7 +47,7 @@ class AccountAuthPresentationTest {
         assertTrue(
             AccountAuthPresentation.canSubmit(
                 mode = AccountAuthMode.CREATE_ACCOUNT,
-                serverUrl = "http://localhost:8080",
+                serverUrl = "http://localhost:22144",
                 username = "alice",
                 password = "long-password",
                 passwordConfirmation = "long-password",
@@ -58,7 +58,7 @@ class AccountAuthPresentationTest {
         assertFalse(
             AccountAuthPresentation.canSubmit(
                 AccountAuthMode.CREATE_ACCOUNT,
-                "http://localhost:8080",
+                "http://localhost:22144",
                 "alice",
                 "short",
                 "short",
@@ -69,7 +69,7 @@ class AccountAuthPresentationTest {
         assertFalse(
             AccountAuthPresentation.canSubmit(
                 AccountAuthMode.CREATE_ACCOUNT,
-                "http://localhost:8080",
+                "http://localhost:22144",
                 "alice",
                 "long-password",
                 "different-password",
@@ -80,7 +80,7 @@ class AccountAuthPresentationTest {
         assertFalse(
             AccountAuthPresentation.canSubmit(
                 AccountAuthMode.CREATE_ACCOUNT,
-                "http://localhost:8080",
+                "http://localhost:22144",
                 "alice",
                 "long-password",
                 "long-password",
@@ -98,7 +98,7 @@ class AccountAuthPresentationTest {
         assertTrue(
             AccountAuthPresentation.canSubmit(
                 AccountAuthMode.CREATE_ACCOUNT,
-                "http://localhost:8080",
+                "http://localhost:22144",
                 "alice",
                 exactLimit,
                 exactLimit,
@@ -109,7 +109,7 @@ class AccountAuthPresentationTest {
         assertFalse(
             AccountAuthPresentation.canSubmit(
                 AccountAuthMode.CREATE_ACCOUNT,
-                "http://localhost:8080",
+                "http://localhost:22144",
                 "alice",
                 beyondByteLimit,
                 beyondByteLimit,

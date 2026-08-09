@@ -1,27 +1,35 @@
 package top.focess.keystead.client
 
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.StandardCopyOption.ATOMIC_MOVE
-import java.nio.file.StandardCopyOption.REPLACE_EXISTING
-import java.util.Properties
-
-enum class SecureStorageMode { BIOMETRIC, MEMORY_ONLY }
-data class PersistedSecureStorageSelection(val mode: SecureStorageMode, val providerId: String?)
-
-class SecureStorageSettings(private val file: Path) {
+/**
+ * Persists the selected secure-storage backend in the consolidated client settings. Two instances
+ * exist: one for the vault secure storage ([isLocalLogin] = false) and one for the local-login
+ * storage ([isLocalLogin] = true).
+ */
+internal class SecureStorageSettings(
+    private val store: ClientSettingsStore,
+    private val isLocalLogin: Boolean,
+) {
     fun load(): PersistedSecureStorageSelection? {
-        if (!Files.exists(file)) return null
-        val values = Properties().also { Files.newInputStream(file).use(it::load) }
-        val mode = runCatching { SecureStorageMode.valueOf(values.getProperty("mode")) }.getOrNull() ?: return null
-        return PersistedSecureStorageSelection(mode, values.getProperty("providerId")?.takeIf(String::isNotBlank))
+        val settings = store.load()
+        val mode = if (isLocalLogin) settings.localLoginStorageMode else settings.secureStorageMode
+        val providerId =
+            if (isLocalLogin) settings.localLoginStorageProviderId else settings.secureStorageProviderId
+        val parsed = runCatching { SecureStorageMode.valueOf(mode ?: return null) }.getOrNull() ?: return null
+        return PersistedSecureStorageSelection(parsed, providerId?.takeIf(String::isNotBlank))
     }
 
     fun save(selection: PersistedSecureStorageSelection) {
-        Files.createDirectories(file.toAbsolutePath().parent)
-        val temporary = file.resolveSibling(".${file.fileName}.tmp")
-        val text = buildString { append("mode=").append(selection.mode.name).append('\n'); selection.providerId?.let { append("providerId=").append(it).append('\n') } }
-        Files.writeString(temporary, text)
-        Files.move(temporary, file, ATOMIC_MOVE, REPLACE_EXISTING)
+        val settings = store.load()
+        if (isLocalLogin) {
+            settings.localLoginStorageMode = selection.mode.name
+            settings.localLoginStorageProviderId = selection.providerId
+        } else {
+            settings.secureStorageMode = selection.mode.name
+            settings.secureStorageProviderId = selection.providerId
+        }
+        store.save(settings)
     }
 }
+
+enum class SecureStorageMode { BIOMETRIC, MEMORY_ONLY }
+data class PersistedSecureStorageSelection(val mode: SecureStorageMode, val providerId: String?)

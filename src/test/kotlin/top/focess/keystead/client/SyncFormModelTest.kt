@@ -11,16 +11,16 @@ class SyncFormModelTest {
     fun serverLoginRequiresOnlineServerUrlAndCredentials() {
         assertTrue(
             SyncFormModel.canLogin(
-                serverUrl = "http://localhost:8080",
+                serverUrl = "http://localhost:22144",
                 username = "alice",
                 password = "secret",
                 serverAvailable = true,
             ),
         )
         assertFalse(SyncFormModel.canLogin("", "alice", "secret", serverAvailable = true))
-        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "", "secret", serverAvailable = true))
-        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "alice", "", serverAvailable = true))
-        assertFalse(SyncFormModel.canLogin("http://localhost:8080", "alice", "secret", serverAvailable = false))
+        assertFalse(SyncFormModel.canLogin("http://localhost:22144", "", "secret", serverAvailable = true))
+        assertFalse(SyncFormModel.canLogin("http://localhost:22144", "alice", "", serverAvailable = true))
+        assertFalse(SyncFormModel.canLogin("http://localhost:22144", "alice", "secret", serverAvailable = false))
     }
 
     @Test
@@ -56,16 +56,16 @@ class SyncFormModelTest {
     fun serverRegistrationRequiresUrlUsernameAndServerPasswordLength() {
         assertTrue(
             SyncFormModel.canRegisterUser(
-                serverUrl = "http://localhost:8080",
+                serverUrl = "http://localhost:22144",
                 username = "alice",
                 password = "long-password",
                 serverAvailable = true,
             ),
         )
         assertFalse(SyncFormModel.canRegisterUser("", "alice", "long-password", serverAvailable = true))
-        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "", "long-password", serverAvailable = true))
-        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "alice", "short", serverAvailable = true))
-        assertFalse(SyncFormModel.canRegisterUser("http://localhost:8080", "alice", "long-password", serverAvailable = false))
+        assertFalse(SyncFormModel.canRegisterUser("http://localhost:22144", "", "long-password", serverAvailable = true))
+        assertFalse(SyncFormModel.canRegisterUser("http://localhost:22144", "alice", "short", serverAvailable = true))
+        assertFalse(SyncFormModel.canRegisterUser("http://localhost:22144", "alice", "long-password", serverAvailable = false))
     }
 
     @Test

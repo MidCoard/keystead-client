@@ -36,7 +36,7 @@ data class SecureStorageUiModel(
             }
 }
 
-class SecureStorageViewModel internal constructor(
+internal class SecureStorageViewModel internal constructor(
     private val settings: SecureStorageSettings,
     private val biometricSelector: (Path, String) -> SecureStorageSelection,
 ) : AutoCloseable {

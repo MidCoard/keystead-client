@@ -240,6 +240,11 @@ internal object ZhStrings : Strings {
     override val settingsTitle = "设置"
     override val settingsIntro =
         "设备存储与会话信息。保险库是本地加密文件；服务器只能看到加密记录和指纹。"
+    override val configLocationLabel = "配置存储位置"
+    override val configLocationHelp = "选择设置（语言、服务器、存储）的存储位置。"
+    override val configLocationGlobal = "客户端主目录"
+    override val configLocationVaultLocal = "保险库路径"
+    override fun configLocationPath(path: String) = "当前配置文件：$path"
     override val groupSession = "会话"
     override val groupAbout = "关于"
     override val groupLanguage = "语言"

@@ -1,4 +1,5 @@
 package top.focess.keystead.client
+import top.focess.keystead.client.ClientSettingsStore
 
 import java.nio.file.Files
 import kotlin.test.Test
@@ -12,7 +13,7 @@ class VaultLocationSettingsTest {
         val fallback = root.resolve("default").resolve("vault.kvault")
 
         val loaded =
-            VaultLocationSettings(root.resolve("vault-location.properties"), fallback).load()
+            VaultLocationSettings(ClientSettingsStore(root.resolve("vault-location.properties")), fallback).load()
 
         assertEquals(fallback.toAbsolutePath().normalize(), loaded)
     }
@@ -23,10 +24,10 @@ class VaultLocationSettingsTest {
         val settingsFile = root.resolve("settings").resolve("vault-location.properties")
         val fallback = root.resolve("default.kvault")
         val selected = root.resolve("relocated vault").resolve("personal vault.kvault")
-        val settings = VaultLocationSettings(settingsFile, fallback)
+        val settings = VaultLocationSettings(ClientSettingsStore(settingsFile), fallback)
 
         val remembered = settings.rememberSuccessfulVault(selected)
-        val reloaded = VaultLocationSettings(settingsFile, fallback).load()
+        val reloaded = VaultLocationSettings(ClientSettingsStore(settingsFile), fallback).load()
 
         assertEquals(selected.toAbsolutePath().normalize(), remembered)
         assertEquals(selected.toAbsolutePath().normalize(), reloaded)
@@ -39,7 +40,7 @@ class VaultLocationSettingsTest {
         val fallback = root.resolve("fallback.kvault")
         Files.writeString(settingsFile, "uri=not a file uri\n")
 
-        val loaded = VaultLocationSettings(settingsFile, fallback).load()
+        val loaded = VaultLocationSettings(ClientSettingsStore(settingsFile), fallback).load()
 
         assertEquals(fallback.toAbsolutePath().normalize(), loaded)
     }
@@ -51,12 +52,11 @@ class VaultLocationSettingsTest {
         val fallback = root.resolve("default.kvault")
         val selected = root.resolve("selected.kvault")
         Files.writeString(selected, "vault bytes")
-        val settings = VaultLocationSettings(settingsFile, fallback)
+        val settings = VaultLocationSettings(ClientSettingsStore(settingsFile), fallback)
         settings.rememberSuccessfulVault(selected)
 
         settings.clear()
 
-        assertFalse(Files.exists(settingsFile))
         assertEquals(fallback.toAbsolutePath().normalize(), settings.load())
         assertEquals("vault bytes", Files.readString(selected))
     }

@@ -144,6 +144,11 @@ internal interface Strings {
 
     val settingsTitle: String
     val settingsIntro: String
+    val configLocationLabel: String
+    val configLocationHelp: String
+    val configLocationGlobal: String
+    val configLocationVaultLocal: String
+    fun configLocationPath(path: String): String
     val groupSession: String
     val groupAbout: String
     val groupLanguage: String

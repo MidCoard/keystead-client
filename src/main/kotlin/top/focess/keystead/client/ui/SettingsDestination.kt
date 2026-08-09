@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.SettingsPresentation
+import top.focess.keystead.client.SettingsScope
 import top.focess.keystead.client.i18n.AppLocale
 import top.focess.keystead.client.i18n.LocalStrings
 
@@ -22,6 +23,9 @@ internal fun SettingsPanel(
     presentation: SettingsPresentation,
     locale: AppLocale,
     onLocaleChange: (AppLocale) -> Unit,
+    settingsScope: SettingsScope,
+    onSettingsScopeChange: (SettingsScope) -> Unit,
+    configFilePath: String,
     onDeleteVaultFile: () -> Unit,
 ) {
     val strings = LocalStrings.current
@@ -49,6 +53,34 @@ internal fun SettingsPanel(
                 )
             }
         }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        GroupLabel(strings.configLocationLabel)
+        Text(
+            strings.configLocationHelp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            KeysteadChoiceChip(
+                selected = settingsScope == SettingsScope.GLOBAL,
+                onClick = { onSettingsScopeChange(SettingsScope.GLOBAL) },
+                label = { Text(strings.configLocationGlobal) },
+                modifier = Modifier.weight(1f),
+            )
+            KeysteadChoiceChip(
+                selected = settingsScope == SettingsScope.VAULT_LOCAL,
+                onClick = { onSettingsScopeChange(SettingsScope.VAULT_LOCAL) },
+                label = { Text(strings.configLocationVaultLocal) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Text(
+            strings.configLocationPath(configFilePath),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         GroupLabel(strings.groupVaultFile)

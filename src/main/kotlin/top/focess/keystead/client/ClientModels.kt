@@ -27,7 +27,7 @@ object ClientHomePreview {
     fun disconnected(): ClientHomeState =
         ClientHomeState(
             connectionState = ClientConnectionState.DISCONNECTED,
-            serverUrl = "http://localhost:8080",
+            serverUrl = "http://localhost:22144",
             activeUser = null,
             vaults = emptyList(),
         )
@@ -35,7 +35,7 @@ object ClientHomePreview {
     fun signedIn(): ClientHomeState =
         ClientHomeState(
             connectionState = ClientConnectionState.CONNECTED,
-            serverUrl = "http://localhost:8080",
+            serverUrl = "http://localhost:22144",
             activeUser = "local",
             vaults =
                 listOf(

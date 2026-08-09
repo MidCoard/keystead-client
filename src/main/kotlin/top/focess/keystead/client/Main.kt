@@ -55,7 +55,7 @@ import top.focess.keystead.share.ShareContents
 
 private val defaultClientDirectory: Path = ClientDataDirectory.resolve()
 private val defaultVaultDirectory: String =
-    defaultClientDirectory.resolve("vault.kvault").toString()
+    defaultClientDirectory.resolve("vaults").resolve("vault.kvault").toString()
 private const val desktopStorageInstance = "keystead-desktop"
 
 fun main() = application {
@@ -102,8 +102,46 @@ fun main() = application {
 
 @Composable
 fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
-    val languageSettings = remember {
-        LanguageSettings(defaultClientDirectory.resolve("language.properties"))
+    val globalSettingsStore = remember {
+        ClientSettingsStore(defaultClientDirectory.resolve("settings.json"))
+    }
+    val vaultLocationSettings =
+        remember {
+            VaultLocationSettings(
+                globalSettingsStore,
+                Path.of(defaultVaultDirectory),
+            )
+        }
+    var vaultDirectory by remember {
+        mutableStateOf(vaultLocationSettings.load().toString())
+    }
+    var settingsScope by remember(vaultDirectory) {
+        mutableStateOf(globalSettingsStore.load().scopeFor(vaultDirectory))
+    }
+    val effectiveSettingsStore = remember(settingsScope, vaultDirectory) {
+        if (settingsScope == SettingsScope.VAULT_LOCAL) {
+            ClientSettingsStore(
+                Path.of(vaultDirectory).toAbsolutePath().normalize().parent.resolve("settings.json"),
+            )
+        } else {
+            globalSettingsStore
+        }
+    }
+    val effectiveConfigPath = remember(settingsScope, vaultDirectory) {
+        if (settingsScope == SettingsScope.VAULT_LOCAL) {
+            Path.of(vaultDirectory).toAbsolutePath().normalize().parent.resolve("settings.json").toString()
+        } else {
+            defaultClientDirectory.resolve("settings.json").toString()
+        }
+    }
+    val onSettingsScopeChange: (SettingsScope) -> Unit = { newScope ->
+        settingsScope = newScope
+        val settings = globalSettingsStore.load()
+        settings.vaultScopes = (settings.vaultScopes ?: emptyMap()) + (vaultDirectory to newScope.name)
+        globalSettingsStore.save(settings)
+    }
+    val languageSettings = remember(effectiveSettingsStore) {
+        LanguageSettings(effectiveSettingsStore)
     }
     var locale by remember { mutableStateOf(languageSettings.load() ?: AppLocale.ENGLISH) }
     val onLocaleChange: (AppLocale) -> Unit = { newLocale ->
@@ -111,21 +149,11 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         languageSettings.save(newLocale)
     }
     val strings = locale.strings
-    val vaultLocationSettings =
-        remember {
-            VaultLocationSettings(
-                defaultClientDirectory.resolve("vault-location.properties"),
-                Path.of(defaultVaultDirectory),
-            )
-        }
-    var vaultDirectory by remember {
-        mutableStateOf(vaultLocationSettings.load().toString())
-    }
     val serverConnectionSettings =
-        remember {
+        remember(effectiveSettingsStore) {
             ServerConnectionSettings(
-                defaultClientDirectory.resolve("server-connection.properties"),
-                "http://localhost:8080",
+                effectiveSettingsStore,
+                "http://localhost:22144",
             )
         }
     var fingerprint by remember { mutableStateOf("") }
@@ -185,11 +213,11 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     var localUnlockCredential by remember { mutableStateOf<LocalUnlockCredential?>(null) }
     var deviceKeySlots by remember { mutableStateOf<List<DeviceKeySlot>>(emptyList()) }
     var deviceLoginAvailable by remember { mutableStateOf(false) }
-    val secureStorageSettings = remember {
-        SecureStorageSettings(defaultClientDirectory.resolve("secure-storage.properties"))
+    val secureStorageSettings = remember(effectiveSettingsStore) {
+        SecureStorageSettings(effectiveSettingsStore, false)
     }
-    val localUnlockStorageSettings = remember {
-        SecureStorageSettings(defaultClientDirectory.resolve("local-login-storage.properties"))
+    val localUnlockStorageSettings = remember(effectiveSettingsStore) {
+        SecureStorageSettings(effectiveSettingsStore, true)
     }
     val secureStorageViewModel =
         remember {
@@ -1556,6 +1584,9 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                 ),
             locale = locale,
             onLocaleChange = onLocaleChange,
+            settingsScope = settingsScope,
+            onSettingsScopeChange = onSettingsScopeChange,
+            configFilePath = effectiveConfigPath,
             onDeleteVaultFile = {
                 destructiveGate.request(
                     DestructiveConfirmation.DeleteVaultFile(vaultDirectory),
