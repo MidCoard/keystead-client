@@ -76,7 +76,7 @@ compose.desktop {
             modules("java.net.http")
             // Installer version mirrors the project release version. Bump per release.
             // macOS DMG requires MAJOR > 0; the project is now 1.x so Dmg is built.
-            packageVersion = "1.1.1-SNAPSHOT"
+            packageVersion = "1.1.0"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first
