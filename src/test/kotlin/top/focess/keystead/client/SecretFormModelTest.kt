@@ -90,4 +90,40 @@ class SecretFormModelTest {
             ),
         )
     }
+
+    @Test
+    fun generatedPasswordBecomesVisibleUntilTheUserHidesIt() {
+        val generated = PasswordDraftState().generated("generated-secret")
+
+        assertEquals("generated-secret", generated.value)
+        assertTrue(generated.visible)
+        assertFalse(generated.hide().visible)
+        assertEquals("generated-secret", generated.hide().value)
+    }
+
+    @Test
+    fun usernameSuggestionsAreUniqueRelevantAndBounded() {
+        assertEquals(
+            listOf("alice", "alice@example.com"),
+            LoginUsernameSuggestions.match(
+                usernames = listOf("Bob", "alice@example.com", "alice", "ALICE", "carol"),
+                input = "ali",
+                limit = 2,
+            ),
+        )
+        assertEquals(
+            listOf("alice", "alice@example.com", "Bob", "carol"),
+            LoginUsernameSuggestions.match(
+                usernames = listOf("Bob", "alice@example.com", "alice", "ALICE", "carol"),
+                input = "",
+                limit = 10,
+            ),
+        )
+    }
+
+    @Test
+    fun inspectorMasksHiddenValuesWithoutUsingAnEditableField() {
+        assertEquals("••••••", InspectorSecretValue.display(""))
+        assertEquals("secret", InspectorSecretValue.display("secret"))
+    }
 }

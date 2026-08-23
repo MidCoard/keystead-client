@@ -47,6 +47,21 @@ data class SecretListItem(
     val software: String?,
     val account: String?,
     val expiry: String? = null,
+    val username: String? = null,
+    val url: String? = null,
+    val labels: Set<String> = emptySet(),
+    val tags: Set<String> = emptySet(),
+    val attributes: Map<String, String> = emptyMap(),
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+    val revision: Long? = null,
+    val fields: List<SecretInspectorField> = emptyList(),
+)
+
+data class SecretInspectorField(
+    val name: String,
+    val secret: Boolean,
+    val value: String? = null,
 )
 
 data class SecretEditSnapshot(
@@ -291,16 +306,51 @@ class LocalVaultSession private constructor(
 
     fun listSecrets(): List<SecretListItem> =
         handle.listSecrets()
-            .map {
+            .map { metadata ->
+                var username: String? = null
+                var url: String? = null
+                var inspectorFields = emptyList<SecretInspectorField>()
+                if (metadata.secretType() == SecretType.LOGIN_PASSWORD) {
+                    handle.withLogin(metadata.secretId()) { view ->
+                        url = view.url().orElse(null)
+                        view.withUsername { username = String(it) }
+                    }
+                } else {
+                    val fieldSpecs =
+                        SecretFormModel.specForOrNull(metadata.secretType())
+                            ?.fields
+                            ?.associateBy(SecretFieldSpec::name)
+                            .orEmpty()
+                    handle.withSecret(metadata.secretId()) { view ->
+                        inspectorFields =
+                            view.orderedFieldNames().map { name ->
+                                val secret = fieldSpecs[name]?.secret ?: true
+                                var value: String? = null
+                                if (!secret) {
+                                    view.withField(name) { chars -> value = String(chars) }
+                                }
+                                SecretInspectorField(name, secret, value)
+                            }
+                    }
+                }
                 SecretListItem(
-                    id = it.secretId().value().toString(),
-                    title = it.title(),
-                    type = it.secretType().name,
-                    category = it.classification().category(),
-                    provider = it.classification().provider(),
-                    software = it.classification().software(),
-                    account = it.classification().account(),
-                    expiry = it.profile().attributes()["expiry"],
+                    id = metadata.secretId().value().toString(),
+                    title = metadata.title(),
+                    type = metadata.secretType().name,
+                    category = metadata.classification().category(),
+                    provider = metadata.classification().provider(),
+                    software = metadata.classification().software(),
+                    account = metadata.classification().account(),
+                    expiry = metadata.profile().attributes()["expiry"],
+                    username = username,
+                    url = url,
+                    labels = metadata.classification().labels(),
+                    tags = metadata.tags(),
+                    attributes = metadata.profile().attributes(),
+                    createdAt = metadata.createdAt().toString(),
+                    updatedAt = metadata.updatedAt().toString(),
+                    revision = metadata.revision(),
+                    fields = inspectorFields,
                 )
             }
 
@@ -330,6 +380,19 @@ class LocalVaultSession private constructor(
         }
     }
 
+    fun revealUsername(secretId: String): String {
+        val output = arrayOfNulls<CharArray>(1)
+        handle.withLogin(SecretId(UUID.fromString(secretId))) { view ->
+            view.withUsername { username -> output[0] = username.copyOf() }
+        }
+        val chars = output[0] ?: CharArray(0)
+        return try {
+            String(chars)
+        } finally {
+            Wipe.wipe(chars)
+        }
+    }
+
     fun editSnapshot(secretId: String): SecretEditSnapshot {
         val metadata = handle.listSecrets().first { it.secretId().value().toString() == secretId }
         return if (metadata.secretType() == SecretType.LOGIN_PASSWORD) {
@@ -341,6 +404,98 @@ class LocalVaultSession private constructor(
 
     fun delete(secretId: String) {
         handle.deleteSecret(SecretId(UUID.fromString(secretId)))
+    }
+
+    /**
+     * Re-saves the selected local value unchanged so it receives the next vault revision. This is
+     * used only to resolve an equal-revision, divergent server head after an idempotent re-upload
+     * returns an older matching event.
+     */
+    fun promoteLocalRecord(secretId: String): Long {
+        val id = SecretId(UUID.fromString(secretId))
+        val metadata = handle.listSecrets().first { it.secretId() == id }
+        when (metadata.secretType()) {
+            SecretType.LOGIN_PASSWORD -> promoteLogin(id)
+            else -> promoteStructured(id)
+        }
+        return handle.listSecrets().first { it.secretId() == id }.revision()
+    }
+
+    private fun promoteLogin(id: SecretId) {
+        var title = ""
+        var classification = SecretClassification.none()
+        var tags = emptySet<String>()
+        var attributes = emptyMap<String, String>()
+        var url: String? = null
+        var username = CharArray(0)
+        var password = CharArray(0)
+        var notes = CharArray(0)
+        try {
+            handle.withLogin(id) { view ->
+                val metadata = view.metadata()
+                title = metadata.title()
+                classification = metadata.classification()
+                tags = metadata.tags()
+                attributes = metadata.profile().attributes()
+                url = view.url().orElse(null)
+                view.withUsername { username = it.copyOf() }
+                view.withPassword { password = it.copyOf() }
+                view.withNotes { notes = it.copyOf() }
+            }
+            SecretBuffer.fromChars(username).use { usernameBuffer ->
+                SecretBuffer.fromChars(password).use { passwordBuffer ->
+                    SecretBuffer.fromChars(notes).use { notesBuffer ->
+                        handle.updateLogin(id) { draft ->
+                            draft.title(title)
+                                .classification(classification)
+                                .username(usernameBuffer)
+                                .password(passwordBuffer)
+                                .url(url)
+                                .notes(notesBuffer)
+                            tags.forEach(draft::tag)
+                            attributes.forEach(draft::attribute)
+                        }
+                    }
+                }
+            }
+        } finally {
+            Wipe.wipe(username)
+            Wipe.wipe(password)
+            Wipe.wipe(notes)
+        }
+    }
+
+    private fun promoteStructured(id: SecretId) {
+        var title = ""
+        var classification = SecretClassification.none()
+        var tags = emptySet<String>()
+        var attributes = emptyMap<String, String>()
+        val values = linkedMapOf<String, CharArray>()
+        try {
+            handle.withSecret(id) { view ->
+                val metadata = view.metadata()
+                title = metadata.title()
+                classification = metadata.classification()
+                tags = metadata.tags()
+                attributes = metadata.profile().attributes()
+                view.orderedFieldNames().forEach { name ->
+                    view.withField(name) { values[name] = it.copyOf() }
+                }
+            }
+            val buffers = values.mapValues { SecretBuffer.fromChars(it.value) }
+            try {
+                handle.updateSecret(id) { draft ->
+                    draft.title(title).classification(classification)
+                    tags.forEach(draft::tag)
+                    attributes.forEach(draft::attribute)
+                    buffers.forEach(draft::field)
+                }
+            } finally {
+                buffers.values.forEach(SecretBuffer::close)
+            }
+        } finally {
+            values.values.forEach(Wipe::wipe)
+        }
     }
 
     /** Publishes a complete idempotent snapshot to the account's one personal event stream. */

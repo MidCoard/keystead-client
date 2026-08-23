@@ -17,6 +17,105 @@ import kotlin.test.assertTrue
  */
 class LiveTwoClientVaultFlowTest {
     @Test
+    fun reuploadingAnOlderEqualRevisionPromotesTheChosenLocalVersion() {
+        val serverUrl = System.getenv("KEYSTEAD_LIVE_TEST_URL")?.trimEnd('/') ?: return
+        val directory = createTempDirectory("keystead-live-equal-revision")
+        val username = "resolve${UUID.randomUUID().toString().replace("-", "").take(16)}"
+        val accountPassword = "Live-test-account-password!"
+        val auth = KeysteadServerAuthClient(serverUrl)
+        auth.registerUser(username, accountPassword.toCharArray())
+
+        auth.login(username, accountPassword.toCharArray()).use { clientAAccount ->
+            auth.login(username, accountPassword.toCharArray()).use { clientBAccount ->
+                LocalVaultSession.openOrCreate(
+                    directory.resolve("client-a.kvault"),
+                    "client-a-master-password".toCharArray(),
+                ).use { clientA ->
+                    val secretId =
+                        clientA.addLogin(
+                            title = "Conflicting login",
+                            username = "alice@example.test",
+                            password = "base-password",
+                            url = "https://example.test",
+                        )
+                    clientA.pushSelectedPersonalRecordsTo(clientAAccount.client(), setOf(secretId))
+
+                    EphemeralVaultAccessSession.create(serverUrl).use { exchange ->
+                        val request = VaultAccessWorkflow(clientBAccount.client()).request(exchange)
+                        val pending =
+                            VaultAccessWorkflow(clientAAccount.client()).pending()
+                                .single { it.requestId == request.requestId }
+                        VaultAccessWorkflow(clientAAccount.client()).approve(pending, clientA)
+                        val approved =
+                            VaultAccessWorkflow(clientBAccount.client()).refresh(request.requestId)
+                        val restored =
+                            ServerVaultProvisioningService().restore(
+                                file = directory.resolve("client-b.kvault"),
+                                request = approved,
+                                exchangeSession = exchange,
+                                newMasterPassphrase = "client-b-master-password".toCharArray(),
+                                client = clientBAccount.client(),
+                                stateStore = SyncStateStore(directory.resolve("client-b-sync")),
+                            )
+                        restored.session.use { clientB ->
+                            clientA.updateLogin(
+                                secretId,
+                                "Conflicting login",
+                                "alice@example.test",
+                                "windows-choice",
+                                "https://example.test",
+                            )
+                            clientB.updateLogin(
+                                secretId,
+                                "Conflicting login",
+                                "alice@example.test",
+                                "macos-choice",
+                                "https://example.test",
+                            )
+                            clientA.pushSelectedPersonalRecordsTo(clientAAccount.client(), setOf(secretId))
+                            clientB.pushSelectedPersonalRecordsTo(clientBAccount.client(), setOf(secretId))
+
+                            val before =
+                                PersonalVaultRecordInventory.compare(
+                                    clientA.currentPersonalRecords(),
+                                    clientAAccount.client().listAllPersonalRecords(),
+                                ).comparisons.orEmpty().single { it.secretId == secretId }
+                            assertEquals(RecordComparisonStatus.HASH_MISMATCH, before.status)
+
+                            assertEquals(
+                                2,
+                                SelectedRecordUploadCoordinator.upload(
+                                    secretIds = setOf(secretId),
+                                    push = {
+                                        clientA.pushSelectedPersonalRecordsTo(
+                                            clientAAccount.client(),
+                                            it,
+                                        )
+                                    },
+                                    refreshComparisons = {
+                                        PersonalVaultRecordInventory.compare(
+                                            clientA.currentPersonalRecords(),
+                                            clientAAccount.client().listAllPersonalRecords(),
+                                        ).comparisons.orEmpty()
+                                    },
+                                    promote = clientA::promoteLocalRecord,
+                                ),
+                            )
+                            val resolved =
+                                PersonalVaultRecordInventory.compare(
+                                    clientA.currentPersonalRecords(),
+                                    clientAAccount.client().listAllPersonalRecords(),
+                                ).comparisons.orEmpty().single { it.secretId == secretId }
+                            assertEquals(RecordComparisonStatus.MATCHED, resolved.status)
+                            assertEquals("windows-choice", clientA.editSnapshot(secretId).password)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun selectiveUploadAndServerRemovalLeaveUnselectedAndLocalRecordsUntouched() {
         val serverUrl = System.getenv("KEYSTEAD_LIVE_TEST_URL")?.trimEnd('/') ?: return
         val directory = createTempDirectory("keystead-live-selective-sync")

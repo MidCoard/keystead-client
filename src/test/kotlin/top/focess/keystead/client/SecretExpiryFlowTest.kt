@@ -40,6 +40,7 @@ class SecretExpiryFlowTest {
                 )
             val item = it.listSecrets().first { s -> s.id == id }
             assertEquals(expiry, item.expiry)
+            assertEquals("alice@example.com", item.username)
             val snapshot = it.editSnapshot(id)
             assertEquals(expiry, snapshot.expiry)
             val state = SecretExpiry.state(item.expiry)

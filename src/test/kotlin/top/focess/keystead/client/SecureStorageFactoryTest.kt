@@ -20,9 +20,15 @@ class SecureStorageFactoryTest {
     }
 
     @Test
-    fun macOsAndLinuxHaveNoBiometricProvider() {
+    fun macOsSelectsTouchIdWhileLinuxHasNoBiometricProvider() {
         val directory = Files.createTempDirectory("keystead-no-biometric-provider")
-        assertEquals("none", assertIs<SecureStorageSelection.Unavailable>(SecureStorageFactory("Mac OS X").biometric(directory, "desktop")).diagnostic.providerId)
+        val macResult =
+            SecureStorageFactory(
+                "Mac OS X",
+                { normalized, _ -> if (normalized.contains("mac")) FakeHelloStore(providerId = "mac-touch-id") else null },
+                SecureRandom(),
+            ).biometric(directory, "desktop")
+        assertEquals("mac-touch-id", assertIs<SecureStorageSelection.Available>(macResult).providerId)
         assertEquals("none", assertIs<SecureStorageSelection.Unavailable>(SecureStorageFactory("Linux").biometric(directory, "desktop")).diagnostic.providerId)
     }
 
@@ -53,8 +59,8 @@ class SecureStorageFactoryTest {
 
     private class FakeHelloStore(
         private val status: OsSecretStoreStatus = OsSecretStoreStatus.AVAILABLE,
+        override val providerId: String = "fake-hello",
     ) : OsSecretStore {
-        override val providerId = "fake-hello"
         var saves = 0
         var loads = 0
         override fun availability() = OsSecretStoreAvailability(status, "fake-status")

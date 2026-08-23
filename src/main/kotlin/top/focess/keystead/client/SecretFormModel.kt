@@ -22,6 +22,41 @@ data class SecretFormSpec(
         get() = fields.map { it.name }
 }
 
+data class PasswordDraftState(
+    val value: String = "",
+    val visible: Boolean = false,
+) {
+    fun edited(value: String): PasswordDraftState = copy(value = value)
+
+    fun generated(value: String): PasswordDraftState = PasswordDraftState(value, visible = true)
+
+    fun hide(): PasswordDraftState = copy(visible = false)
+
+    fun show(): PasswordDraftState = copy(visible = true)
+}
+
+object LoginUsernameSuggestions {
+    fun match(usernames: List<String>, input: String, limit: Int = 8): List<String> {
+        require(limit >= 0) { "Suggestion limit cannot be negative" }
+        val needle = input.trim()
+        return usernames
+            .asSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinctBy(String::lowercase)
+            .filter { needle.isEmpty() || it.contains(needle, ignoreCase = true) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+            .take(limit)
+            .toList()
+    }
+}
+
+object InspectorSecretValue {
+    const val MASKED = "••••••"
+
+    fun display(revealedValue: String): String = revealedValue.ifEmpty { MASKED }
+}
+
 object SecretFormModel {
     val supportedTypes: List<SecretType> =
         listOf(

@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -9,6 +10,63 @@ plugins {
 
 group = "top.focess"
 version = "1.1.1-SNAPSHOT"
+
+val isMacHost = System.getProperty("os.name").lowercase().contains("mac")
+val macTouchIdHelper = layout.buildDirectory.file("app-resources/macos/keystead-mac-secure-store")
+val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.0.dmg")
+val compileMacTouchIdHelper =
+    tasks.register<Exec>("compileMacTouchIdHelper") {
+        onlyIf { isMacHost }
+        val source = layout.projectDirectory.file("src/main/swift/KeysteadMacSecureStore.swift")
+        inputs.file(source)
+        outputs.file(macTouchIdHelper)
+        doFirst { macTouchIdHelper.get().asFile.parentFile.mkdirs() }
+        commandLine(
+            "xcrun",
+            "swiftc",
+            "-O",
+            "-framework",
+            "LocalAuthentication",
+            "-framework",
+            "Security",
+            source.asFile.absolutePath,
+            "-o",
+            macTouchIdHelper.get().asFile.absolutePath,
+        )
+    }
+
+val fixMacDmgVolumeIcon =
+    tasks.register<Exec>("fixMacDmgVolumeIcon") {
+        onlyIf { isMacHost }
+        val brandIcon = layout.projectDirectory.file("src/main/resources/keystead-icon.icns")
+        val iconScript = layout.projectDirectory.file("scripts/set-macos-dmg-icon.sh")
+        inputs.file(brandIcon)
+        inputs.file(iconScript)
+        outputs.upToDateWhen { false }
+        commandLine(
+            "bash",
+            iconScript.asFile.absolutePath,
+            macDmgFile.get().asFile.absolutePath,
+            brandIcon.asFile.absolutePath,
+        )
+    }
+
+tasks.configureEach {
+    if (name == "prepareAppResources") dependsOn(compileMacTouchIdHelper)
+    if (name == "packageDmg") finalizedBy(fixMacDmgVolumeIcon)
+    if (name == "createDistributable" && isMacHost) {
+        doLast {
+            val packagedHelper =
+                layout.buildDirectory
+                    .file("compose/binaries/main/app/Keystead.app/Contents/app/resources/keystead-mac-secure-store")
+                    .get()
+                    .asFile
+            check(packagedHelper.isFile && packagedHelper.setExecutable(true, false) && packagedHelper.canExecute()) {
+                "Packaged macOS Touch ID helper is missing or not executable"
+            }
+        }
+    }
+}
 
 kotlin {
     jvmToolchain(25)
@@ -38,6 +96,10 @@ tasks.test {
         // current behavior; remove this once Protobuf no longer makes that call.
         "--sun-misc-unsafe-memory-access=allow",
     )
+    if (isMacHost) {
+        dependsOn(compileMacTouchIdHelper)
+        systemProperty("keystead.mac.touch-id.helper", macTouchIdHelper.get().asFile.absolutePath)
+    }
 }
 
 tasks.register<Test>("liveServerVaultSmoke") {
@@ -53,7 +115,7 @@ tasks.register<Test>("liveServerVaultSmoke") {
         "KEYSTEAD_LIVE_TEST_URL",
         providers.gradleProperty("keysteadSmokeServerUrl")
             .orElse(providers.environmentVariable("KEYSTEAD_LIVE_TEST_URL"))
-            .orElse("http://127.0.0.1:8080")
+            .orElse("http://127.0.0.1:22144")
             .get(),
     )
     jvmArgs(
@@ -70,6 +132,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Dmg)
             packageName = "Keystead"
+            appResourcesRootDir.set(layout.buildDirectory.dir("app-resources"))
             // The packaged image is produced with jlink. HttpClient is loaded by
             // the server clients at runtime, so static module discovery does not
             // reliably include it in the minimized JRE.
@@ -88,6 +151,9 @@ compose.desktop {
                 )
             windows {
                 iconFile.set(project.file("src/main/resources/keystead-icon.ico"))
+            }
+            macOS {
+                iconFile.set(project.file("src/main/resources/keystead-icon.icns"))
             }
             linux {
                 iconFile.set(project.file("src/main/resources/keystead-icon.png"))

@@ -16,6 +16,33 @@ internal enum class RecordComparisonStatus {
     HASH_MISMATCH,
 }
 
+internal object SyncUploadConflictResolver {
+    fun needsPromotion(entry: RecordComparisonEntry): Boolean =
+        entry.status == RecordComparisonStatus.HASH_MISMATCH &&
+            entry.localRevision != null &&
+            entry.localRevision == entry.serverRevision
+}
+
+internal object SelectedRecordUploadCoordinator {
+    fun upload(
+        secretIds: Set<String>,
+        push: (Set<String>) -> Int,
+        refreshComparisons: () -> List<RecordComparisonEntry>,
+        promote: (String) -> Unit,
+    ): Int {
+        var pushed = push(secretIds)
+        val promoteIds =
+            refreshComparisons()
+                .filter { it.secretId in secretIds && SyncUploadConflictResolver.needsPromotion(it) }
+                .mapTo(linkedSetOf(), RecordComparisonEntry::secretId)
+        if (promoteIds.isEmpty()) return pushed
+        promoteIds.forEach(promote)
+        pushed += push(promoteIds)
+        refreshComparisons()
+        return pushed
+    }
+}
+
 internal data class RecordComparisonEntry(
     val secretId: String,
     val recordHash: String,

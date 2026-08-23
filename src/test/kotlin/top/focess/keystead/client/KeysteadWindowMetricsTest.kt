@@ -12,11 +12,9 @@ class KeysteadWindowMetricsTest {
     }
 
     @Test
-    fun minimumAwtWindowSizeHonoursWindowsDisplayScaling() {
-        assertEquals(1200, KeysteadWindowMetrics.minimumWidthPixels(1.25))
-        assertEquals(850, KeysteadWindowMetrics.minimumHeightPixels(1.25))
-        assertEquals(960, KeysteadWindowMetrics.minimumWidthPixels(1.0))
-        assertEquals(680, KeysteadWindowMetrics.minimumHeightPixels(1.0))
+    fun minimumAwtWindowSizeUsesLogicalUnitsOnRetinaDisplays() {
+        assertEquals(960, KeysteadWindowMetrics.minimumWidthPixels())
+        assertEquals(680, KeysteadWindowMetrics.minimumHeightPixels())
     }
 
     @Test

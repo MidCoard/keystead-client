@@ -43,7 +43,7 @@ internal fun LocalLoginPanel(
     DestinationCard {
         SectionHeader(strings.destinationLabel(KeysteadDestination.DEVICE_ACCESS))
         Text(
-            strings.deviceAccessIntro,
+            strings.deviceAccessIntro(presentation.provider),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -105,7 +105,7 @@ internal fun LocalLoginPanel(
                             enabled = biometricAvailable,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(strings.verifyLocalLogin)
+                            Text(strings.verifyLocalLogin(presentation.provider))
                         }
                     }
                 DeviceAccessMode.NEW_BIOMETRIC ->
@@ -114,7 +114,7 @@ internal fun LocalLoginPanel(
                         enabled = biometricAvailable,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(strings.createProtectedIdentity)
+                        Text(strings.createProtectedIdentity(presentation.provider))
                     }
                 DeviceAccessMode.BIOMETRIC_UNAVAILABLE -> Unit
             }

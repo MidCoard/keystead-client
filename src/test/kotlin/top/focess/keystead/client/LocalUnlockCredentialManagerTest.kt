@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 class LocalUnlockCredentialManagerTest {
     @Test
@@ -43,18 +44,75 @@ class LocalUnlockCredentialManagerTest {
         }
     }
 
+    @Test
+    fun existingBiometricCredentialIsWipedImmediatelyAfterOneUse() {
+        val directory = createTempDirectory("keystead-one-shot-login")
+        val storage = TestBiometricStorage()
+        LocalUnlockCredentialManager(directory, biometricStorage = { storage }).use { manager ->
+            manager.loadOrCreate(SecureStorageMode.BIOMETRIC)
+        }
+        storage.resetLoadCount()
+
+        val manager = LocalUnlockCredentialManager(directory, biometricStorage = { storage })
+        lateinit var consumed: LocalUnlockCredential
+        val result =
+            manager.useExistingOnce { credential ->
+                consumed = credential
+                "used"
+            }
+
+        assertEquals("used", result)
+        assertEquals(1, storage.loadCount)
+        assertNull(manager.currentCredential())
+        assertFailsWith<IllegalStateException> { consumed.privateKey() }
+        manager.close()
+    }
+
+    @Test
+    fun existingBiometricCredentialIsWipedWhenItsOneShotUseFails() {
+        val directory = createTempDirectory("keystead-failed-one-shot-login")
+        val storage = TestBiometricStorage()
+        LocalUnlockCredentialManager(directory, biometricStorage = { storage }).use { manager ->
+            manager.loadOrCreate(SecureStorageMode.BIOMETRIC)
+        }
+        storage.resetLoadCount()
+
+        val manager = LocalUnlockCredentialManager(directory, biometricStorage = { storage })
+        lateinit var consumed: LocalUnlockCredential
+        assertFailsWith<IllegalArgumentException> {
+            manager.useExistingOnce { credential ->
+                consumed = credential
+                throw IllegalArgumentException("unlock failed")
+            }
+        }
+
+        assertEquals(1, storage.loadCount)
+        assertNull(manager.currentCredential())
+        assertFailsWith<IllegalStateException> { consumed.privateKey() }
+        manager.close()
+    }
+
     private class TestBiometricStorage : SecureStorage {
         override val capability = SecureStorageCapability.OS_BIOMETRIC_GATED
         private val values = mutableMapOf<SecureStorageKey, ByteArray>()
+        var loadCount: Int = 0
+            private set
 
         override fun save(key: SecureStorageKey, value: ByteArray) {
             values.put(key, value.copyOf())?.fill(0)
         }
 
-        override fun load(key: SecureStorageKey): ByteArray? = values[key]?.copyOf()
+        override fun load(key: SecureStorageKey): ByteArray? {
+            loadCount += 1
+            return values[key]?.copyOf()
+        }
 
         override fun delete(key: SecureStorageKey) {
             values.remove(key)?.fill(0)
+        }
+
+        fun resetLoadCount() {
+            loadCount = 0
         }
     }
 }

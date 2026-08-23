@@ -6,11 +6,12 @@
     "name": "local"
   },
   "components": [
-    "local/ai-codegraph"
+    "local/ai-codegraph",
+    "local/assistant-artifacts"
   ],
   "exclude": [],
   "custom": [
-    "docs"
+    "docs/"
   ],
   "addons": {}
 }

@@ -13,6 +13,7 @@
 # - editor/java-ide-metadata
 # - build/gradle
 # - local/ai-codegraph
+# - local/assistant-artifacts
 # Edit ignorekit.json or shared definitions, then regenerate.
 
 # macOS files
@@ -115,5 +116,9 @@ gradle-app.setting
 # Codegraph analysis artifacts
 .codegraph/
 
+# Local assistant and analysis artifacts
+.superpowers/
+.veto_history
+
 # Project-specific ignores
-docs
+docs/

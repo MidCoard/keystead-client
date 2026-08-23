@@ -81,6 +81,24 @@ class DeviceUnlockUiModelTest {
     }
 
     @Test
+    fun macReadyStatusNamesTouchIdInsteadOfWindowsHello() {
+        val model =
+            DeviceUnlockUiModel.derive(
+                biometricDescriptor,
+                credentialLoaded = false,
+                loadedPersistence = null,
+                selectedMode = SecureStorageMode.BIOMETRIC,
+                biometricAvailability = BiometricAvailability.AVAILABLE,
+                deviceLoginAvailable = true,
+                providerId = "mac-touch-id",
+            )
+
+        val status = AppLocale.ENGLISH.strings.deviceUnlockStatus(model)
+        assertTrue(status.contains("Touch ID"))
+        assertFalse(status.contains("Windows Hello"))
+    }
+
+    @Test
     fun deviceLoginIsTheDefaultWhenTheSelectedVaultSupportsIt() {
         val ready =
             DeviceUnlockUiModel.derive(

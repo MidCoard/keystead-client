@@ -6,6 +6,7 @@ import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,7 +19,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
@@ -456,12 +456,22 @@ private fun SecretsArea(
     }
 }
 
+internal object CenteredContentPresentation {
+    fun widthDp(availableWidthDp: Float, maximumWidthDp: Float): Float =
+        minOf(availableWidthDp, maximumWidthDp)
+}
+
 @Composable
 private fun CenteredScrollContent(maxWidth: Dp, content: @Composable () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        val contentWidth =
+            CenteredContentPresentation.widthDp(this.maxWidth.value, maxWidth.value).dp
         Column(
             modifier =
-                Modifier.widthIn(max = maxWidth).fillMaxHeight()
+                Modifier.width(contentWidth).fillMaxHeight()
                     .verticalScroll(rememberScrollState())
                     .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),

@@ -1,28 +1,51 @@
 package top.focess.keystead.client.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.SecretFormModel
+import top.focess.keystead.client.LoginUsernameSuggestions
+import top.focess.keystead.client.PasswordBreachResult
+import top.focess.keystead.client.PasswordStrength
 import top.focess.keystead.client.i18n.LocalStrings
 import top.focess.keystead.model.SecretType
+
+internal object UsernameSuggestionMenuPresentation {
+    fun widthDp(fieldWidthPixels: Int, density: Float): Float {
+        require(density > 0f)
+        return fieldWidthPixels / density
+    }
+}
 
 @Composable
 fun AddSecretPanel(
@@ -33,8 +56,14 @@ fun AddSecretPanel(
     onTitleChange: (String) -> Unit,
     username: String,
     onUsernameChange: (String) -> Unit,
+    usernameSuggestions: List<String>,
     password: String,
     onPasswordChange: (String) -> Unit,
+    passwordVisible: Boolean,
+    onPasswordVisibilityChange: (Boolean) -> Unit,
+    passwordStrength: PasswordStrength,
+    passwordBreachResult: PasswordBreachResult,
+    onCheckPassword: () -> Unit,
     onGeneratePassword: () -> Unit,
     url: String,
     onUrlChange: (String) -> Unit,
@@ -114,8 +143,14 @@ fun AddSecretPanel(
                 enabled = enabled,
                 username = username,
                 onUsernameChange = onUsernameChange,
+                usernameSuggestions = usernameSuggestions,
                 password = password,
                 onPasswordChange = onPasswordChange,
+                passwordVisible = passwordVisible,
+                onPasswordVisibilityChange = onPasswordVisibilityChange,
+                passwordStrength = passwordStrength,
+                passwordBreachResult = passwordBreachResult,
+                onCheckPassword = onCheckPassword,
                 onGeneratePassword = onGeneratePassword,
             )
         } else if (spec != null) {
@@ -261,32 +296,142 @@ private fun LoginSecretFields(
     enabled: Boolean,
     username: String,
     onUsernameChange: (String) -> Unit,
+    usernameSuggestions: List<String>,
     password: String,
     onPasswordChange: (String) -> Unit,
+    passwordVisible: Boolean,
+    onPasswordVisibilityChange: (Boolean) -> Unit,
+    passwordStrength: PasswordStrength,
+    passwordBreachResult: PasswordBreachResult,
+    onCheckPassword: () -> Unit,
     onGeneratePassword: () -> Unit,
 ) {
     val strings = LocalStrings.current
-    OutlinedTextField(
-        username,
-        onUsernameChange,
-        label = { Text(strings.fieldUsername) },
-        enabled = enabled,
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    var suggestionsExpanded by remember { mutableStateOf(false) }
+    var usernameFieldWidthPixels by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current.density
+    val matchingUsernames =
+        remember(usernameSuggestions, username) {
+            LoginUsernameSuggestions.match(usernameSuggestions, username)
+                .filterNot { it.equals(username, ignoreCase = true) }
+        }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            username,
+            onValueChange = {
+                onUsernameChange(it)
+                suggestionsExpanded = true
+            },
+            label = { Text(strings.fieldUsername) },
+            enabled = enabled,
+            singleLine = true,
+            modifier =
+                Modifier.fillMaxWidth().onGloballyPositioned {
+                    usernameFieldWidthPixels = it.size.width
+                }.onFocusChanged {
+                    if (it.isFocused) suggestionsExpanded = true
+                },
+        )
+        DropdownMenu(
+            expanded = enabled && suggestionsExpanded && matchingUsernames.isNotEmpty(),
+            onDismissRequest = { suggestionsExpanded = false },
+            modifier =
+                if (usernameFieldWidthPixels > 0) {
+                    Modifier.width(
+                        UsernameSuggestionMenuPresentation
+                            .widthDp(usernameFieldWidthPixels, density)
+                            .dp,
+                    )
+                } else {
+                    Modifier
+                },
+        ) {
+            matchingUsernames.forEach { suggestion ->
+                DropdownMenuItem(
+                    text = { Text(suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onUsernameChange(suggestion)
+                        suggestionsExpanded = false
+                    },
+                )
+            }
+        }
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         OutlinedTextField(
             password,
             onPasswordChange,
             label = { RequiredFieldLabel(strings.fieldPassword) },
             enabled = enabled,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation =
+                if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                PasswordVisibilityButton(
+                    visible = passwordVisible,
+                    onClick = { onPasswordVisibilityChange(!passwordVisible) },
+                )
+            },
             singleLine = true,
             modifier = Modifier.weight(1f),
         )
         OutlinedButton(onClick = onGeneratePassword, enabled = enabled, modifier = Modifier.width(128.dp)) {
             Text(strings.generate)
         }
+    }
+    Text(
+        when (passwordStrength) {
+            PasswordStrength.WEAK -> strings.passwordStrengthWeak
+            PasswordStrength.FAIR -> strings.passwordStrengthFair
+            PasswordStrength.STRONG -> strings.passwordStrengthStrong
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedButton(
+        onClick = onCheckPassword,
+        enabled = enabled && password.isNotEmpty() && passwordBreachResult != PasswordBreachResult.Checking,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            if (passwordBreachResult == PasswordBreachResult.Checking) {
+                strings.checkingPassword
+            } else {
+                strings.checkBreachedPassword
+            }
+        )
+    }
+    val breachMessage =
+        when (passwordBreachResult) {
+            PasswordBreachResult.NotChecked -> null
+            PasswordBreachResult.Checking -> strings.checkingPassword
+            PasswordBreachResult.NotFound -> strings.passwordNotFoundInBreaches
+            is PasswordBreachResult.Found -> strings.passwordFoundInBreaches(passwordBreachResult.count)
+            PasswordBreachResult.Failed -> strings.passwordBreachCheckUnavailable
+        }
+    breachMessage?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color =
+                if (passwordBreachResult is PasswordBreachResult.Found) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+        )
+    }
+    Text(
+        strings.passwordBreachPrivacy,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun PasswordVisibilityButton(visible: Boolean, onClick: () -> Unit) {
+    val strings = LocalStrings.current
+    TextButton(onClick = onClick) {
+        Text(if (visible) strings.hide else strings.reveal)
     }
 }
 

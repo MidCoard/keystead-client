@@ -62,6 +62,8 @@ internal object ZhStrings : Strings {
     }
 
     override val lock = "锁定"
+    override val openApplication = "打开 Keystead"
+    override val quit = "退出"
     override val vaultLocked = "保险库已锁定"
     override val vaultOpen = "保险库已打开"
 
@@ -78,16 +80,23 @@ internal object ZhStrings : Strings {
         "保险库成功打开后，此路径会成为下次启动的默认位置。更改路径不会移动或删除旧文件。"
     override val vaultFileMustNotBeBlank = "保险库文件不能为空"
     override val unlockWithDeviceLogin = "使用本机登录解锁"
+    override val touchIdAuthenticationReason = "使用 Touch ID 解锁 Keystead。"
     override val localLoginCredentialUnavailable =
         "本机登录凭据不可用。请在“本机登录”页面重新加载或创建。"
-    override fun deviceUnlockStatus(model: DeviceUnlockUiModel) = when (model.state) {
-        DeviceUnlockState.NOT_CONFIGURED -> "尚未配置本机登录。"
-        DeviceUnlockState.DEVICE_LOGIN_NOT_ENABLED ->
-            "此保险库未启用设备登录。请使用主密码打开。"
-        DeviceUnlockState.LOADED -> "本机登录凭据已加载并可用。"
-        DeviceUnlockState.BIOMETRIC_NOT_SELECTED -> "本机登录使用 Windows Hello。请在“本机登录”页面选择它。"
-        DeviceUnlockState.BIOMETRIC_UNAVAILABLE -> "Windows Hello 不可用或尚未配置；Keystead 不会绕过验证。"
-        DeviceUnlockState.BIOMETRIC_READY -> "Windows Hello 已就绪；打开保险库前将由 Windows 验证您。"
+    override fun deviceUnlockStatus(model: DeviceUnlockUiModel): String {
+        val biometric = biometricName(model.provider)
+        return when (model.state) {
+            DeviceUnlockState.NOT_CONFIGURED -> "尚未配置本机登录。"
+            DeviceUnlockState.DEVICE_LOGIN_NOT_ENABLED ->
+                "此保险库未启用设备登录。请使用主密码打开。"
+            DeviceUnlockState.LOADED -> "本机登录凭据已加载并可用。"
+            DeviceUnlockState.BIOMETRIC_NOT_SELECTED ->
+                "本机登录使用 $biometric。请在“本机登录”页面选择它。"
+            DeviceUnlockState.BIOMETRIC_UNAVAILABLE ->
+                "$biometric 不可用或尚未配置；Keystead 不会绕过验证。"
+            DeviceUnlockState.BIOMETRIC_READY ->
+                "$biometric 已就绪；打开保险库前将由操作系统验证您。"
+        }
     }
     override val chooseDeviceStorageFirst = "请先选择本机登录保护方式"
     override val identityStorageCannotChange = "本机登录已经配置。如需更换保护方式，请先移除现有本机登录。"
@@ -134,6 +143,15 @@ internal object ZhStrings : Strings {
     override val fieldUrl = "网址"
     override val fieldUsername = "用户名"
     override val fieldPassword = "密码"
+    override val checkBreachedPassword = "检查已知泄露"
+    override val checkingPassword = "正在检查已知泄露…"
+    override val passwordStrengthWeak = "强度：弱"
+    override val passwordStrengthFair = "强度：一般"
+    override val passwordStrengthStrong = "强度：强"
+    override val passwordNotFoundInBreaches = "未在已知泄露密码库中发现。"
+    override fun passwordFoundInBreaches(count: Int) = "警告：此密码在已知泄露密码库中出现了 $count 次。"
+    override val passwordBreachCheckUnavailable = "暂时无法检查泄露情况，请稍后重试。"
+    override val passwordBreachPrivacy = "使用隐私保护的部分哈希查询；不会发送密码或完整哈希。"
     override val fieldCategory = "分类"
     override val fieldProvider = "提供商"
     override val fieldSoftware = "软件"
@@ -203,6 +221,13 @@ internal object ZhStrings : Strings {
     }
     override val expiryReviewRotate = "请检查并轮换这些密钥项。"
     override val selectedSecret = "已选密钥项"
+    override val secretDetails = "详细信息"
+    override val fieldLabels = "标签"
+    override val fieldTags = "标记"
+    override val fieldCreatedAt = "创建时间"
+    override val fieldUpdatedAt = "更新时间"
+    override val fieldRevision = "修订版本"
+    override fun customAttributeLabel(name: String) = name
     override val currentCode = "当前验证码"
     override val authCodeShown = "已显示验证码"
     override val authCodeHidden = "已隐藏验证码"
@@ -254,9 +279,12 @@ internal object ZhStrings : Strings {
     override val deleteVaultFileHelp = "从这台电脑永久删除当前已打开的加密保险库文件。"
     override val memoryOnly = "仅本次会话（内存）"
     override val memoryStorageDescription = "私钥仅存于内存——明确锁定设备身份或退出应用后即丢失。"
-    override val deviceAccessIntro = "使用 Windows Hello 打开这个本地保险库。本机登录永远不会连接 Keystead 服务器。"
-    override val createProtectedIdentity = "设置 Windows Hello"
-    override val verifyLocalLogin = "使用 Windows Hello 验证"
+    override fun deviceAccessIntro(provider: DeviceProtectionProvider) =
+        "使用 ${biometricName(provider)} 打开这个本地保险库。本机登录永远不会连接 Keystead 服务器。"
+    override fun createProtectedIdentity(provider: DeviceProtectionProvider) =
+        "设置 ${biometricName(provider)}"
+    override fun verifyLocalLogin(provider: DeviceProtectionProvider) =
+        "使用 ${biometricName(provider)} 验证"
     override val deviceLogin = "本机登录"
     override val deviceLoginEnabledLabel = "已启用"
     override val deviceLoginNotEnabledLabel = "未启用"
@@ -277,16 +305,19 @@ internal object ZhStrings : Strings {
     override fun deviceProtectionLabel(provider: DeviceProtectionProvider) =
         when (provider) {
             DeviceProtectionProvider.WINDOWS_HELLO -> "受 Windows Hello 保护"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "受 Touch ID 保护"
             DeviceProtectionProvider.UNKNOWN -> "生物验证保护不可用"
         }
     override fun deviceProtectionAvailableLabel(provider: DeviceProtectionProvider) =
         when (provider) {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello 可用"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Touch ID 可用"
             DeviceProtectionProvider.UNKNOWN -> "生物验证保护可用"
         }
     override fun deviceProtectionUnavailableLabel(provider: DeviceProtectionProvider) =
         when (provider) {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello 不可用或尚未配置"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Touch ID 不可用或尚未配置"
             DeviceProtectionProvider.UNKNOWN -> "此平台不提供生物验证保护"
         }
     override val notSet = "（未设置）"
@@ -304,22 +335,29 @@ internal object ZhStrings : Strings {
         val selected =
             when (model.selectedMode) {
                 SecureStorageMode.BIOMETRIC ->
-                    if (model.biometricActive) "已选：Windows Hello"
-                    else "已选：Windows Hello（未激活）"
+                    if (model.biometricActive) "已选：${biometricName(DeviceProtectionProvider.from(model.providerId))}"
+                    else "已选：${biometricName(DeviceProtectionProvider.from(model.providerId))}（未激活）"
                 SecureStorageMode.MEMORY_ONLY -> "已选：仅内存"
                 null -> "已选：尚未选择存储方式"
             }
         val availability =
             when (model.biometricAvailability) {
-                BiometricAvailability.NOT_CHECKED -> "尚未检查 Windows Hello"
-                BiometricAvailability.CHECKING -> "正在检查 Windows Hello"
+                BiometricAvailability.NOT_CHECKED -> "尚未检查生物验证提供方"
+                BiometricAvailability.CHECKING -> "正在检查生物验证提供方"
                 BiometricAvailability.AVAILABLE ->
-                    "生物验证可用：${model.providerId ?: "Windows Hello"}"
+                    "生物验证可用：${biometricName(DeviceProtectionProvider.from(model.providerId))}"
                 BiometricAvailability.UNAVAILABLE ->
                     "生物验证不可用：${model.diagnosticCode ?: "provider-unavailable"}"
             }
         return "$selected。$availability。"
     }
+
+    private fun biometricName(provider: DeviceProtectionProvider): String =
+        when (provider) {
+            DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Touch ID"
+            DeviceProtectionProvider.UNKNOWN -> "生物验证"
+        }
 
     override val recoveryHubIntro = "通过便携备份或 Keystead 服务器恢复一个新的本地保险库。"
     override val recoverFromBackup = "便携备份"

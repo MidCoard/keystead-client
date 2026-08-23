@@ -63,6 +63,8 @@ internal object EnStrings : Strings {
     }
 
     override val lock = "Lock"
+    override val openApplication = "Open Keystead"
+    override val quit = "Quit"
     override val vaultLocked = "Vault locked"
     override val vaultOpen = "Vault open"
 
@@ -80,16 +82,23 @@ internal object EnStrings : Strings {
             "Changing it does not move or delete the previous file."
     override val vaultFileMustNotBeBlank = "Vault file must not be blank"
     override val unlockWithDeviceLogin = "Unlock with local login"
+    override val touchIdAuthenticationReason = "Unlock Keystead with Touch ID."
     override val localLoginCredentialUnavailable =
         "The local-login credential is unavailable. Reload or create it on the Local login page."
-    override fun deviceUnlockStatus(model: DeviceUnlockUiModel) = when (model.state) {
-        DeviceUnlockState.NOT_CONFIGURED -> "Local login is not configured."
-        DeviceUnlockState.DEVICE_LOGIN_NOT_ENABLED ->
-            "Device login is not enabled for this vault. Open it with the master password."
-        DeviceUnlockState.LOADED -> "The local login credential is loaded and ready."
-        DeviceUnlockState.BIOMETRIC_NOT_SELECTED -> "Local login uses Windows Hello. Select it on the Local login page."
-        DeviceUnlockState.BIOMETRIC_UNAVAILABLE -> "Windows Hello is unavailable or not configured. Keystead will not bypass it."
-        DeviceUnlockState.BIOMETRIC_READY -> "Windows Hello is ready. Windows will verify you before the vault opens."
+    override fun deviceUnlockStatus(model: DeviceUnlockUiModel): String {
+        val biometric = biometricName(model.provider)
+        return when (model.state) {
+            DeviceUnlockState.NOT_CONFIGURED -> "Local login is not configured."
+            DeviceUnlockState.DEVICE_LOGIN_NOT_ENABLED ->
+                "Device login is not enabled for this vault. Open it with the master password."
+            DeviceUnlockState.LOADED -> "The local login credential is loaded and ready."
+            DeviceUnlockState.BIOMETRIC_NOT_SELECTED ->
+                "Local login uses $biometric. Select it on the Local login page."
+            DeviceUnlockState.BIOMETRIC_UNAVAILABLE ->
+                "$biometric is unavailable or not configured. Keystead will not bypass it."
+            DeviceUnlockState.BIOMETRIC_READY ->
+                "$biometric is ready. Your operating system will verify you before the vault opens."
+        }
     }
     override val chooseDeviceStorageFirst = "Choose local-login protection first"
     override val identityStorageCannotChange =
@@ -143,6 +152,17 @@ internal object EnStrings : Strings {
     override val fieldUrl = "URL"
     override val fieldUsername = "Username"
     override val fieldPassword = "Password"
+    override val checkBreachedPassword = "Check known breaches"
+    override val checkingPassword = "Checking known breaches…"
+    override val passwordStrengthWeak = "Strength: weak"
+    override val passwordStrengthFair = "Strength: fair"
+    override val passwordStrengthStrong = "Strength: strong"
+    override val passwordNotFoundInBreaches = "Not found in the known breached-password corpus."
+    override fun passwordFoundInBreaches(count: Int) =
+        "Warning: found $count time(s) in the known breached-password corpus."
+    override val passwordBreachCheckUnavailable = "Breach check unavailable. Try again later."
+    override val passwordBreachPrivacy =
+        "Privacy-preserving partial-hash lookup; the password and full hash are never sent."
     override val fieldCategory = "Category"
     override val fieldProvider = "Provider"
     override val fieldSoftware = "Software"
@@ -212,6 +232,13 @@ internal object EnStrings : Strings {
     }
     override val expiryReviewRotate = "Review and rotate these secrets."
     override val selectedSecret = "Selected secret"
+    override val secretDetails = "Details"
+    override val fieldLabels = "Labels"
+    override val fieldTags = "Tags"
+    override val fieldCreatedAt = "Created"
+    override val fieldUpdatedAt = "Updated"
+    override val fieldRevision = "Revision"
+    override fun customAttributeLabel(name: String) = name
     override val currentCode = "Current code"
     override val authCodeShown = "Authentication code shown"
     override val authCodeHidden = "Authentication code hidden"
@@ -265,10 +292,12 @@ internal object EnStrings : Strings {
         "Permanently removes the currently open encrypted vault file from this computer."
     override val memoryOnly = "Session only (RAM)"
     override val memoryStorageDescription = "Private key lives in RAM only and is discarded when you explicitly lock the identity or quit the app."
-    override val deviceAccessIntro =
-        "Open this local vault with Windows Hello. Local login never connects to Keystead Server."
-    override val createProtectedIdentity = "Set up Windows Hello"
-    override val verifyLocalLogin = "Verify with Windows Hello"
+    override fun deviceAccessIntro(provider: DeviceProtectionProvider) =
+        "Open this local vault with ${biometricName(provider)}. Local login never connects to Keystead Server."
+    override fun createProtectedIdentity(provider: DeviceProtectionProvider) =
+        "Set up ${biometricName(provider)}"
+    override fun verifyLocalLogin(provider: DeviceProtectionProvider) =
+        "Verify with ${biometricName(provider)}"
     override val deviceLogin = "Local login"
     override val deviceLoginEnabledLabel = "Enabled"
     override val deviceLoginNotEnabledLabel = "Not enabled"
@@ -293,16 +322,19 @@ internal object EnStrings : Strings {
     override fun deviceProtectionLabel(provider: DeviceProtectionProvider) =
         when (provider) {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Protected by Windows Hello"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Protected by Touch ID"
             DeviceProtectionProvider.UNKNOWN -> "Biometric protection unavailable"
         }
     override fun deviceProtectionAvailableLabel(provider: DeviceProtectionProvider) =
         when (provider) {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello is available"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Touch ID is available"
             DeviceProtectionProvider.UNKNOWN -> "Biometric protection is available"
         }
     override fun deviceProtectionUnavailableLabel(provider: DeviceProtectionProvider) =
         when (provider) {
             DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello is unavailable or not configured"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Touch ID is unavailable or not configured"
             DeviceProtectionProvider.UNKNOWN -> "Biometric protection is unavailable on this platform"
         }
     override val notSet = "(not set)"
@@ -320,22 +352,29 @@ internal object EnStrings : Strings {
         val selected =
             when (model.selectedMode) {
                 SecureStorageMode.BIOMETRIC ->
-                    if (model.biometricActive) "Selected: Windows Hello"
-                    else "Selected: Windows Hello (inactive)"
+                    if (model.biometricActive) "Selected: ${biometricName(DeviceProtectionProvider.from(model.providerId))}"
+                    else "Selected: ${biometricName(DeviceProtectionProvider.from(model.providerId))} (inactive)"
                 SecureStorageMode.MEMORY_ONLY -> "Selected: memory only"
                 null -> "Selected: no storage mode"
             }
         val availability =
             when (model.biometricAvailability) {
-                BiometricAvailability.NOT_CHECKED -> "Windows Hello not checked"
-                BiometricAvailability.CHECKING -> "Checking Windows Hello"
+                BiometricAvailability.NOT_CHECKED -> "Biometric provider not checked"
+                BiometricAvailability.CHECKING -> "Checking biometric provider"
                 BiometricAvailability.AVAILABLE ->
-                    "Biometric provider available: ${model.providerId ?: "Windows Hello"}"
+                    "Biometric provider available: ${biometricName(DeviceProtectionProvider.from(model.providerId))}"
                 BiometricAvailability.UNAVAILABLE ->
                     "Biometric provider unavailable: ${model.diagnosticCode ?: "provider-unavailable"}"
             }
         return "$selected. $availability."
     }
+
+    private fun biometricName(provider: DeviceProtectionProvider): String =
+        when (provider) {
+            DeviceProtectionProvider.WINDOWS_HELLO -> "Windows Hello"
+            DeviceProtectionProvider.MAC_TOUCH_ID -> "Touch ID"
+            DeviceProtectionProvider.UNKNOWN -> "biometric protection"
+        }
 
     override val recoveryHubIntro =
         "Restore a new local vault from a portable backup or from Keystead Server."

@@ -45,6 +45,7 @@ data class DeviceLoginPresentation(
 
 enum class DeviceProtectionProvider {
     WINDOWS_HELLO,
+    MAC_TOUCH_ID,
     UNKNOWN,
     ;
 
@@ -52,6 +53,7 @@ enum class DeviceProtectionProvider {
         fun from(providerId: String?): DeviceProtectionProvider =
             when (providerId) {
                 "windows-hello" -> WINDOWS_HELLO
+                "mac-touch-id" -> MAC_TOUCH_ID
                 else -> UNKNOWN
             }
     }

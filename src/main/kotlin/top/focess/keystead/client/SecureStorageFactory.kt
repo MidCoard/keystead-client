@@ -23,6 +23,7 @@ class SecureStorageFactory internal constructor(
     constructor(
         osName: String = System.getProperty("os.name"),
         windowHandle: () -> WinDef.HWND? = { null },
+        touchIdAuthenticationReason: () -> String = { "Unlock Keystead with Touch ID." },
     ) : this(
         osName,
         { normalized, directory ->
@@ -32,6 +33,11 @@ class SecureStorageFactory internal constructor(
                         directory.resolve("windows-hello"),
                         JnaWindowsHelloPort(windowHandle),
                     )
+                normalized.contains("mac") || normalized.contains("darwin") ->
+                    MacTouchIdSecretStore(
+                        ProcessMacTouchIdPort(MacTouchIdHelperLocator.resolve(directory)),
+                        touchIdAuthenticationReason,
+                    )
                 else -> null
             }
         },
@@ -39,13 +45,6 @@ class SecureStorageFactory internal constructor(
     )
 
     fun biometric(dataDirectory: Path, instanceId: String): SecureStorageSelection {
-        if (!osName.lowercase().contains("windows")) {
-            return unavailable(
-                "none",
-                OsSecretStoreFailure.UNSUPPORTED,
-                "biometric-provider-unsupported",
-            )
-        }
         val provider =
             providers(osName.lowercase(), dataDirectory)
                 ?: return unavailable(
@@ -76,8 +75,14 @@ class SecureStorageFactory internal constructor(
         }
         return SecureStorageSelection.Available(
             LazySecureStorage(SecureStorageCapability.OS_BIOMETRIC_GATED) {
+                val storageFile =
+                    if (provider.providerId == "windows-hello") {
+                        "windows-hello-storage.ks2"
+                    } else {
+                        "mac-touch-id-storage.ks2"
+                    }
                 NativeSecureStorage(
-                    dataDirectory.resolve("windows-hello-storage.ks2"),
+                    dataDirectory.resolve(storageFile),
                     instanceId,
                     provider,
                     random,

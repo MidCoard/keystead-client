@@ -127,6 +127,14 @@ class LocalUnlockCredentialManager(
             adopt(loadUnlocked(descriptor.persistence))
         }
 
+    internal fun <T> useExistingOnce(action: (LocalUnlockCredential) -> T): T =
+        useOnce(::loadExisting, action)
+
+    internal fun <T> useOrCreateOnce(
+        mode: SecureStorageMode,
+        action: (LocalUnlockCredential) -> T,
+    ): T = useOnce({ loadOrCreate(mode) }, action)
+
     fun unload() {
         current?.close()
         current = null
@@ -140,6 +148,19 @@ class LocalUnlockCredentialManager(
         current = credential
         currentPersistence = credential.persistence
         return credential
+    }
+
+    private fun <T> useOnce(
+        load: () -> LocalUnlockCredential,
+        action: (LocalUnlockCredential) -> T,
+    ): T {
+        unload()
+        val credential = load()
+        return try {
+            action(credential)
+        } finally {
+            unload()
+        }
     }
 
     private fun descriptorUnlocked(): LocalUnlockCredentialDescriptor? {

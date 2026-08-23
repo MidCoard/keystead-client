@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -51,8 +54,10 @@ import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.SecretExpiry
 import top.focess.keystead.client.SecretExpiryStatus
 import top.focess.keystead.client.SecretFormModel
+import top.focess.keystead.client.InspectorSecretValue
 import top.focess.keystead.client.SecretGrouper
 import top.focess.keystead.client.SecretGroupingMode
+import top.focess.keystead.client.SecretInspectorField
 import top.focess.keystead.client.SecretListItem
 import top.focess.keystead.client.SecretListQuery
 import top.focess.keystead.client.i18n.LocalStrings
@@ -71,6 +76,140 @@ internal fun SecretListQuery.hasFilters(): Boolean =
         category.isNotBlank() ||
         provider.isNotBlank() ||
         software.isNotBlank()
+
+internal enum class InspectorCredentialKind { USERNAME, PASSWORD }
+
+internal data class InspectorCredentialRowModel(
+    val kind: InspectorCredentialKind,
+    val value: String,
+    val copyEnabled: Boolean,
+    val revealed: Boolean,
+)
+
+internal object InspectorCredentialPresentation {
+    fun rows(username: String, revealedPassword: String): List<InspectorCredentialRowModel> =
+        listOf(
+            InspectorCredentialRowModel(
+                kind = InspectorCredentialKind.USERNAME,
+                value = username.ifEmpty { "—" },
+                copyEnabled = username.isNotEmpty(),
+                revealed = true,
+            ),
+            InspectorCredentialRowModel(
+                kind = InspectorCredentialKind.PASSWORD,
+                value = InspectorSecretValue.display(revealedPassword),
+                copyEnabled = revealedPassword.isNotEmpty(),
+                revealed = revealedPassword.isNotEmpty(),
+            ),
+        )
+}
+
+internal enum class InspectorDetailKind {
+    URL,
+    ACCOUNT,
+    PROVIDER,
+    SOFTWARE,
+    CATEGORY,
+    EXPIRY,
+    LABELS,
+    TAGS,
+    ATTRIBUTE,
+    CREATED_AT,
+    UPDATED_AT,
+    REVISION,
+}
+
+internal data class InspectorDetailRowModel(
+    val kind: InspectorDetailKind,
+    val value: String,
+    val name: String? = null,
+)
+
+internal object InspectorDetailPresentation {
+    fun rows(secret: SecretListItem): List<InspectorDetailRowModel> = buildList {
+        secret.url?.takeIf(String::isNotBlank)?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.URL, it))
+        }
+        secret.account?.takeIf(String::isNotBlank)?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.ACCOUNT, it))
+        }
+        secret.provider?.takeIf(String::isNotBlank)?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.PROVIDER, it))
+        }
+        secret.software?.takeIf(String::isNotBlank)?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.SOFTWARE, it))
+        }
+        secret.category?.takeIf(String::isNotBlank)?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.CATEGORY, it))
+        }
+        secret.expiry?.takeIf(String::isNotBlank)?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.EXPIRY, it))
+        }
+        if (secret.labels.isNotEmpty()) {
+            add(
+                InspectorDetailRowModel(
+                    InspectorDetailKind.LABELS,
+                    secret.labels.sorted().joinToString(", "),
+                )
+            )
+        }
+        if (secret.tags.isNotEmpty()) {
+            add(
+                InspectorDetailRowModel(
+                    InspectorDetailKind.TAGS,
+                    secret.tags.sorted().joinToString(", "),
+                )
+            )
+        }
+        secret.attributes
+            .filterKeys { it != "expiry" }
+            .toSortedMap()
+            .forEach { (name, value) ->
+                add(InspectorDetailRowModel(InspectorDetailKind.ATTRIBUTE, value, name))
+            }
+        secret.createdAt?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.CREATED_AT, it))
+        }
+        secret.updatedAt?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.UPDATED_AT, it))
+        }
+        secret.revision?.let {
+            add(InspectorDetailRowModel(InspectorDetailKind.REVISION, it.toString()))
+        }
+    }
+}
+
+internal data class InspectorFieldRowModel(
+    val name: String,
+    val value: String,
+    val secret: Boolean,
+    val revealed: Boolean,
+    val copyEnabled: Boolean,
+)
+
+internal object InspectorFieldPresentation {
+    fun rows(
+        fields: List<SecretInspectorField>,
+        revealedFieldName: String?,
+        revealedValue: String,
+    ): List<InspectorFieldRowModel> =
+        fields.map { field ->
+            val revealed = field.secret && field.name == revealedFieldName && revealedValue.isNotEmpty()
+            val value =
+                when {
+                    !field.secret -> field.value.orEmpty().ifEmpty { "—" }
+                    revealed -> revealedValue
+                    else -> InspectorSecretValue.MASKED
+                }
+            InspectorFieldRowModel(
+                name = field.name,
+                value = value,
+                secret = field.secret,
+                revealed = revealed,
+                copyEnabled = if (field.secret) revealed else !field.value.isNullOrEmpty(),
+            )
+        }
+}
 
 @Composable
 internal fun SecretListPanel(
@@ -398,13 +537,15 @@ private fun ExpiryReminderBanner(expiredCount: Int, dueSoonCount: Int) {
 @Composable
 fun InspectorPanel(
     selectedSecret: SecretListItem?,
+    revealedFieldName: String?,
     revealedValue: String,
     showTotpCode: Boolean,
     totpCode: String,
     totpSecondsRemaining: Int,
-    onReveal: () -> Unit,
+    onReveal: (String) -> Unit,
     onHide: () -> Unit,
-    onCopy: () -> Unit,
+    onCopy: (String) -> Unit,
+    onCopyUsername: () -> Unit,
     onToggleTotpCode: () -> Unit,
     onCopyTotpCode: () -> Unit,
     onDelete: () -> Unit,
@@ -418,10 +559,11 @@ fun InspectorPanel(
             EmptyInspector()
             return@DestinationCard
         }
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         val type = SecretType.valueOf(selectedSecret.type)
-        val revealLabel =
-            if (type == SecretType.LOGIN_PASSWORD) strings.fieldPassword
-            else strings.secretFieldLabel(SecretFormModel.specFor(type).revealFieldName)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -445,20 +587,17 @@ fun InspectorPanel(
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (selectedSecret.category != null ||
-            selectedSecret.provider != null ||
-            selectedSecret.software != null ||
-            selectedSecret.account != null
-        ) {
-            Text(
-                listOfNotNull(
-                    selectedSecret.category,
-                    selectedSecret.provider,
-                    selectedSecret.software,
-                    selectedSecret.account,
-                )
-                    .joinToString(" / "),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (type == SecretType.LOGIN_PASSWORD) {
+            LoginCredentialsCard(
+                rows =
+                    InspectorCredentialPresentation.rows(
+                        selectedSecret.username.orEmpty(),
+                        revealedValue,
+                ),
+                onCopyUsername = onCopyUsername,
+                onReveal = { onReveal("password") },
+                onHide = onHide,
+                onCopyPassword = { onCopy("password") },
             )
         }
         if (type == SecretType.MFA_SECRET) {
@@ -500,27 +639,23 @@ fun InspectorPanel(
                 ) { Text(strings.copyCode) }
             }
         }
-        OutlinedTextField(
-            value = revealedValue,
-            onValueChange = {},
-            label = { Text(revealLabel) },
-            placeholder = { Text("••••••") },
-            readOnly = true,
-            singleLine = true,
-            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val revealed = revealedValue.isNotEmpty()
-            Button(
-                onClick = if (revealed) onHide else onReveal,
-                modifier = Modifier.weight(1f),
-            ) { Text(if (revealed) strings.hide else strings.reveal) }
-            OutlinedButton(
-                onClick = onCopy,
-                enabled = revealed,
-                modifier = Modifier.weight(1f),
-            ) { Text(strings.copy) }
+        if (type != SecretType.LOGIN_PASSWORD && selectedSecret.fields.isNotEmpty()) {
+            SecretFieldsCard(
+                rows =
+                    InspectorFieldPresentation.rows(
+                        selectedSecret.fields,
+                        revealedFieldName,
+                        revealedValue,
+                    ),
+                onReveal = onReveal,
+                onHide = onHide,
+                onCopy = onCopy,
+            )
+        }
+        val detailRows = InspectorDetailPresentation.rows(selectedSecret)
+        if (detailRows.isNotEmpty()) {
+            SectionHeader(strings.secretDetails)
+            InspectorDetailsCard(detailRows)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text(strings.edit) }
@@ -532,6 +667,241 @@ fun InspectorPanel(
                         contentColor = MaterialTheme.colorScheme.error
                     ),
             ) { Text(strings.delete) }
+        }
+        }
+    }
+}
+
+@Composable
+private fun LoginCredentialsCard(
+    rows: List<InspectorCredentialRowModel>,
+    onCopyUsername: () -> Unit,
+    onReveal: () -> Unit,
+    onHide: () -> Unit,
+    onCopyPassword: () -> Unit,
+) {
+    val strings = LocalStrings.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            rows.forEachIndexed { index, row ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 68.dp)
+                            .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (row.kind == InspectorCredentialKind.USERNAME) {
+                                strings.fieldUsername
+                            } else {
+                                strings.fieldPassword
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            row.value,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontFamily =
+                                if (row.kind == InspectorCredentialKind.PASSWORD) {
+                                    FontFamily.Monospace
+                                } else {
+                                    null
+                                },
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                    when (row.kind) {
+                        InspectorCredentialKind.USERNAME ->
+                            TextButton(
+                                onClick = onCopyUsername,
+                                enabled = row.copyEnabled,
+                            ) { Text(strings.copy) }
+                        InspectorCredentialKind.PASSWORD -> {
+                            TextButton(onClick = if (row.revealed) onHide else onReveal) {
+                                Text(if (row.revealed) strings.hide else strings.reveal)
+                            }
+                            TextButton(
+                                onClick = onCopyPassword,
+                                enabled = row.copyEnabled,
+                            ) { Text(strings.copy) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SecretFieldsCard(
+    rows: List<InspectorFieldRowModel>,
+    onReveal: (String) -> Unit,
+    onHide: () -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    val strings = LocalStrings.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            rows.forEachIndexed { index, row ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                Row(
+                    modifier =
+                        Modifier.fillMaxWidth().heightIn(min = 68.dp)
+                            .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            strings.secretFieldLabel(row.name),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            row.value,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    if (row.secret) {
+                        TextButton(onClick = { if (row.revealed) onHide() else onReveal(row.name) }) {
+                            Text(if (row.revealed) strings.hide else strings.reveal)
+                        }
+                    }
+                    TextButton(
+                        onClick = { onCopy(row.name) },
+                        enabled = row.copyEnabled,
+                    ) { Text(strings.copy) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InspectorDetailsCard(rows: List<InspectorDetailRowModel>) {
+    val strings = LocalStrings.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            rows.forEachIndexed { index, row ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        inspectorDetailLabel(row, strings),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        row.value,
+                        maxLines = if (row.kind == InspectorDetailKind.URL) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontFamily =
+                            if (row.kind in setOf(
+                                    InspectorDetailKind.URL,
+                                    InspectorDetailKind.CREATED_AT,
+                                    InspectorDetailKind.UPDATED_AT,
+                                    InspectorDetailKind.REVISION,
+                                )
+                            ) {
+                                FontFamily.Monospace
+                            } else {
+                                null
+                            },
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun inspectorDetailLabel(row: InspectorDetailRowModel, strings: Strings): String =
+    when (row.kind) {
+        InspectorDetailKind.URL -> strings.fieldUrl
+        InspectorDetailKind.ACCOUNT -> strings.fieldAccount
+        InspectorDetailKind.PROVIDER -> strings.fieldProvider
+        InspectorDetailKind.SOFTWARE -> strings.fieldSoftware
+        InspectorDetailKind.CATEGORY -> strings.fieldCategory
+        InspectorDetailKind.EXPIRY -> strings.fieldExpiry
+        InspectorDetailKind.LABELS -> strings.fieldLabels
+        InspectorDetailKind.TAGS -> strings.fieldTags
+        InspectorDetailKind.ATTRIBUTE -> strings.customAttributeLabel(row.name.orEmpty())
+        InspectorDetailKind.CREATED_AT -> strings.fieldCreatedAt
+        InspectorDetailKind.UPDATED_AT -> strings.fieldUpdatedAt
+        InspectorDetailKind.REVISION -> strings.fieldRevision
+    }
+
+@Composable
+private fun InspectorValueDisplay(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    monospace: Boolean = false,
+) {
+    Surface(
+        modifier = modifier.heightIn(min = 56.dp),
+        shape = MaterialTheme.shapes.small,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        color = Color.Transparent,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                value,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontFamily = if (monospace) FontFamily.Monospace else null,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }

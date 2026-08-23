@@ -52,6 +52,8 @@ internal interface Strings {
     fun destinationLabel(destination: KeysteadDestination): String
     fun destinationZoneLabel(zone: KeysteadZone): String
     val lock: String
+    val openApplication: String
+    val quit: String
     val vaultLocked: String
     val vaultOpen: String
 
@@ -67,6 +69,7 @@ internal interface Strings {
     val vaultLocationHelp: String
     val vaultFileMustNotBeBlank: String
     val unlockWithDeviceLogin: String
+    val touchIdAuthenticationReason: String
     val localLoginCredentialUnavailable: String
     fun deviceUnlockStatus(model: DeviceUnlockUiModel): String
     val chooseDeviceStorageFirst: String
@@ -95,6 +98,15 @@ internal interface Strings {
     val fieldUrl: String
     val fieldUsername: String
     val fieldPassword: String
+    val checkBreachedPassword: String
+    val checkingPassword: String
+    val passwordStrengthWeak: String
+    val passwordStrengthFair: String
+    val passwordStrengthStrong: String
+    val passwordNotFoundInBreaches: String
+    fun passwordFoundInBreaches(count: Int): String
+    val passwordBreachCheckUnavailable: String
+    val passwordBreachPrivacy: String
     val fieldCategory: String
     val fieldProvider: String
     val fieldSoftware: String
@@ -127,6 +139,13 @@ internal interface Strings {
     fun expiryReminders(expired: Int, dueSoon: Int): String
     val expiryReviewRotate: String
     val selectedSecret: String
+    val secretDetails: String
+    val fieldLabels: String
+    val fieldTags: String
+    val fieldCreatedAt: String
+    val fieldUpdatedAt: String
+    val fieldRevision: String
+    fun customAttributeLabel(name: String): String
     val currentCode: String
     val authCodeShown: String
     val authCodeHidden: String
@@ -158,9 +177,9 @@ internal interface Strings {
     val deleteVaultFileHelp: String
     val memoryOnly: String
     val memoryStorageDescription: String
-    val deviceAccessIntro: String
-    val createProtectedIdentity: String
-    val verifyLocalLogin: String
+    fun deviceAccessIntro(provider: DeviceProtectionProvider): String
+    fun createProtectedIdentity(provider: DeviceProtectionProvider): String
+    fun verifyLocalLogin(provider: DeviceProtectionProvider): String
     val deviceLogin: String
     val deviceLoginEnabledLabel: String
     val deviceLoginNotEnabledLabel: String

@@ -10,22 +10,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberWindowState
 import com.sun.jna.Native
 import com.sun.jna.platform.win32.WinDef
 import java.awt.Dimension
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import top.focess.keystead.memory.Wipe
 import top.focess.keystead.client.i18n.AppLocale
 import top.focess.keystead.client.i18n.LanguageSettings
@@ -58,28 +64,60 @@ private val defaultVaultDirectory: String =
     defaultClientDirectory.resolve("vaults").resolve("vault.kvault").toString()
 private const val desktopStorageInstance = "keystead-desktop"
 
-fun main() = application {
-    val appIcon =
+fun main(args: Array<String>) = application {
+    val brandImage =
         remember {
-            BitmapPainter(KeysteadBrand.loadIconImage().toComposeImageBitmap())
+            KeysteadBrand.loadIconImage().also(KeysteadBrand::installDesktopIcon)
+        }
+    val appIcon =
+        remember(brandImage) {
+            BitmapPainter(brandImage.toComposeImageBitmap())
         }
     val windowState =
         rememberWindowState(
             width = (KeysteadWindowMetrics.WideBreakpointDp + 120).dp,
             height = 820.dp,
         )
+    var windowVisible by remember { mutableStateOf(true) }
+    val desktopController = remember { DesktopAppController() }
+    val trayEnabled = remember { DesktopTrayPolicy.isEnabled(isTraySupported, args.asList()) }
+    val trayStrings =
+        remember {
+            AppLocale.forLanguageTag(Locale.getDefault().toLanguageTag()).strings
+        }
+    if (trayEnabled) {
+        Tray(
+            icon = appIcon,
+            tooltip = trayStrings.appTitle,
+            onAction = { windowVisible = true },
+            menu = {
+                Item(trayStrings.openApplication, onClick = { windowVisible = true })
+                Item(trayStrings.lock, onClick = desktopController::lockVault)
+                Separator()
+                Item(trayStrings.quit, onClick = ::exitApplication)
+            },
+        )
+    }
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            when (DesktopClosePolicy.action(trayEnabled)) {
+                DesktopCloseAction.LOCK_AND_HIDE -> {
+                    desktopController.lockVault()
+                    windowVisible = false
+                }
+                DesktopCloseAction.EXIT -> exitApplication()
+            }
+        },
+        visible = windowVisible,
         title = "Keystead",
         icon = appIcon,
         state = windowState,
     ) {
         DisposableEffect(Unit) {
-            val displayTransform = window.graphicsConfiguration.defaultTransform
             window.minimumSize =
                 Dimension(
-                    KeysteadWindowMetrics.minimumWidthPixels(displayTransform.scaleX),
-                    KeysteadWindowMetrics.minimumHeightPixels(displayTransform.scaleY),
+                    KeysteadWindowMetrics.minimumWidthPixels(),
+                    KeysteadWindowMetrics.minimumHeightPixels(),
                 )
             onDispose {}
         }
@@ -93,7 +131,10 @@ fun main() = application {
                     modifier = Modifier.fillMaxSize(),
                     color = androidx.compose.material3.MaterialTheme.colorScheme.background,
                 ) {
-                    KeysteadClientApp(windowHandle = { WinDef.HWND(Native.getWindowPointer(window)) })
+                    KeysteadClientApp(
+                        windowHandle = { WinDef.HWND(Native.getWindowPointer(window)) },
+                        desktopController = desktopController,
+                    )
                 }
             }
         }
@@ -101,7 +142,10 @@ fun main() = application {
 }
 
 @Composable
-fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
+fun KeysteadClientApp(
+    windowHandle: () -> WinDef.HWND? = { null },
+    desktopController: DesktopAppController = DesktopAppController(),
+) {
     val globalSettingsStore = remember {
         ClientSettingsStore(defaultClientDirectory.resolve("settings.json"))
     }
@@ -149,6 +193,8 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         languageSettings.save(newLocale)
     }
     val strings = locale.strings
+    val currentTouchIdAuthenticationReason by
+        rememberUpdatedState(strings.touchIdAuthenticationReason)
     val serverConnectionSettings =
         remember(effectiveSettingsStore) {
             ServerConnectionSettings(
@@ -167,6 +213,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     var filterProvider by remember { mutableStateOf("") }
     var filterSoftware by remember { mutableStateOf("") }
     var groupingMode by remember { mutableStateOf(SecretGroupingMode.NONE) }
+    var revealedFieldName by remember { mutableStateOf<String?>(null) }
     var revealedValue by remember { mutableStateOf("") }
     var revealGeneration by remember { mutableStateOf(0L) }
     val revealLifecycle = remember { RevealLifecycle() }
@@ -182,7 +229,10 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     var secretType by remember { mutableStateOf(SecretType.LOGIN_PASSWORD) }
     var title by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var passwordDraft by remember { mutableStateOf(PasswordDraftState()) }
+    var passwordBreachResult by remember { mutableStateOf<PasswordBreachResult>(PasswordBreachResult.NotChecked) }
+    val passwordChecker = remember { PwnedPasswordChecker() }
+    val uiScope = rememberCoroutineScope()
     var url by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var provider by remember { mutableStateOf("") }
@@ -223,14 +273,20 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         remember {
             SecureStorageViewModel(
                 secureStorageSettings,
-                SecureStorageFactory(windowHandle = windowHandle),
+                SecureStorageFactory(
+                    windowHandle = windowHandle,
+                    touchIdAuthenticationReason = { currentTouchIdAuthenticationReason },
+                ),
             )
         }
     val localUnlockStorageViewModel =
         remember {
             SecureStorageViewModel(
                 localUnlockStorageSettings,
-                SecureStorageFactory(windowHandle = windowHandle),
+                SecureStorageFactory(
+                    windowHandle = windowHandle,
+                    touchIdAuthenticationReason = { currentTouchIdAuthenticationReason },
+                ),
             )
         }
     val localUnlockCredentialManager = remember {
@@ -294,7 +350,8 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     fun clearSecretEditor() {
         title = ""
         username = ""
-        password = ""
+        passwordDraft = PasswordDraftState()
+        passwordBreachResult = PasswordBreachResult.NotChecked
         url = ""
         category = ""
         provider = ""
@@ -495,7 +552,10 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     LaunchedEffect(revealGeneration, selectedSecretId) {
         if (revealedValue.isNotEmpty()) {
             delay(30_000)
-            if (revealLifecycle.expire(java.time.Instant.now(), revealGeneration)) revealedValue = ""
+            if (revealLifecycle.expire(java.time.Instant.now(), revealGeneration)) {
+                revealedFieldName = null
+                revealedValue = ""
+            }
         }
     }
     LaunchedEffect(clipboardTicket) {
@@ -536,6 +596,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         deviceKeySlots = current.deviceSlots()
         if (selectedSecretId !in secrets.map { it.id }) {
             selectedSecretId = null
+            revealedFieldName = null
             revealedValue = ""
         }
     }
@@ -543,9 +604,12 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     fun lockVault(nextStatus: String = strings.vaultLocked) {
         session?.close()
         session = null
+        localUnlockCredentialManager.unload()
+        localUnlockCredential = null
         secrets = emptyList()
         selectedSecretId = null
         revealLifecycle.clear()
+        revealedFieldName = null
         revealedValue = ""
         clipboardLifecycle.dispose(java.time.Instant.now(), clipboardTicket)
         clipboardTicket = null
@@ -576,6 +640,11 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         pendingSyncComparison = null
         syncAccept.clear()
         unlockError = null
+    }
+
+    DisposableEffect(desktopController) {
+        desktopController.onLockVault = { lockVault() }
+        onDispose { desktopController.onLockVault = {} }
     }
 
     fun runAction(
@@ -666,6 +735,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
             if (selectedSecretId == secretId) {
                 selectedSecretId = null
                 revealLifecycle.clear()
+                revealedFieldName = null
                 revealedValue = ""
                 showTotpCode = false
                 totpCode = ""
@@ -781,9 +851,8 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         }
     }
 
-    fun enableDeviceLoginIfReady(): Boolean {
+    fun enableDeviceLoginIfReady(credential: LocalUnlockCredential): Boolean {
         val current = session ?: return false
-        val credential = localUnlockCredential ?: return false
         val descriptor = localUnlockDescriptor ?: return false
         if (!localUnlockCredentialManager.canEnrollVaultKey) return false
         val vaultFingerprint = current.fingerprintValue()
@@ -833,14 +902,18 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                         descriptor.persistence,
                     )
             }
-            localUnlockCredential = localUnlockCredentialManager.loadExisting()
-            localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-            status =
-                if (enableDeviceLoginIfReady()) {
-                    strings.deviceLoginEnabled
-                } else {
-                    strings.localLoginReadyStatus
-                }
+            try {
+                val enabled =
+                    localUnlockCredentialManager.useExistingOnce { credential ->
+                        localUnlockCredential = credential
+                        enableDeviceLoginIfReady(credential)
+                    }
+                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+                status =
+                    if (enabled) strings.deviceLoginEnabled else strings.localLoginReadyStatus
+            } finally {
+                localUnlockCredential = null
+            }
         }
     }
 
@@ -849,15 +922,18 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
             check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
             localUnlockStorageViewModel.selectBiometric()
             localUnlockStorageModel = localUnlockStorageViewModel.model
-            localUnlockCredential =
-                localUnlockCredentialManager.loadOrCreate(SecureStorageMode.BIOMETRIC)
-            localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-            status =
-                if (enableDeviceLoginIfReady()) {
-                    strings.deviceLoginEnabled
-                } else {
-                    strings.localLoginReadyStatus
-                }
+            try {
+                val enabled =
+                    localUnlockCredentialManager.useOrCreateOnce(SecureStorageMode.BIOMETRIC) { credential ->
+                        localUnlockCredential = credential
+                        localUnlockDescriptor = localUnlockCredentialManager.descriptor()
+                        enableDeviceLoginIfReady(credential)
+                    }
+                status =
+                    if (enabled) strings.deviceLoginEnabled else strings.localLoginReadyStatus
+            } finally {
+                localUnlockCredential = null
+            }
         }
     }
 
@@ -919,7 +995,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                         val serverPvr =
                             remote
                                 .filter { it.secretId == entry.secretId }
-                                .maxWith(compareBy<PersonalVaultRecord> { it.revision }.thenBy { it.serverSequence })
+                                .maxWithOrNull(compareBy<PersonalVaultRecord> { it.revision }.thenBy { it.serverSequence })
                                 ?: return@mapNotNull null
                         val serverRecord = serverPvr.toEncryptedSyncRecord()
                         val serverFields =
@@ -1116,10 +1192,20 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                 fingerprint = restored.fingerprintValue()
                 selectedSecretId = null
                 revealLifecycle.clear()
+                revealedFieldName = null
                 revealedValue = ""
                 clearSecretEditor()
                 refresh(restored)
-                enableDeviceLoginIfReady()
+                if (localUnlockDescriptor != null) {
+                    try {
+                        localUnlockCredentialManager.useExistingOnce { credential ->
+                            localUnlockCredential = credential
+                            enableDeviceLoginIfReady(credential)
+                        }
+                    } finally {
+                        localUnlockCredential = null
+                    }
+                }
                 backupPassword = ""
                 backupPasswordConfirmation = ""
                 backupNewMasterPassphrase = ""
@@ -1156,6 +1242,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                 if (it != secretType) {
                     clearSecretEditor()
                     revealLifecycle.clear()
+                    revealedFieldName = null
                     revealedValue = ""
                     secretType = it
                     category = SecretFormModel.specForOrNull(it)?.defaultCategory.orEmpty()
@@ -1167,11 +1254,42 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
             onTitleChange = { title = it },
             username = username,
             onUsernameChange = { username = it },
-            password = password,
-            onPasswordChange = { password = it },
+            usernameSuggestions = secrets.mapNotNull(SecretListItem::username),
+            password = passwordDraft.value,
+            onPasswordChange = {
+                passwordDraft = passwordDraft.edited(it)
+                passwordBreachResult = PasswordBreachResult.NotChecked
+            },
+            passwordVisible = passwordDraft.visible,
+            onPasswordVisibilityChange = {
+                passwordDraft = if (it) passwordDraft.show() else passwordDraft.hide()
+            },
+            passwordStrength = PasswordStrengthEvaluator.evaluate(passwordDraft.value),
+            passwordBreachResult = passwordBreachResult,
+            onCheckPassword = {
+                val checkedPassword = passwordDraft.value
+                if (checkedPassword.isNotEmpty()) {
+                    passwordBreachResult = PasswordBreachResult.Checking
+                    uiScope.launch {
+                        val chars = checkedPassword.toCharArray()
+                        val result =
+                            try {
+                                val count = withContext(Dispatchers.IO) { passwordChecker.breachCount(chars) }
+                                if (count == 0) PasswordBreachResult.NotFound
+                                else PasswordBreachResult.Found(count)
+                            } catch (_: Exception) {
+                                PasswordBreachResult.Failed
+                            } finally {
+                                Wipe.wipe(chars)
+                            }
+                        if (passwordDraft.value == checkedPassword) passwordBreachResult = result
+                    }
+                }
+            },
             onGeneratePassword = {
                 runAction {
-                    password = PasswordDraftGenerator.generate()
+                    passwordDraft = passwordDraft.generated(PasswordDraftGenerator.generate())
+                    passwordBreachResult = PasswordBreachResult.NotChecked
                     status = strings.generatedPassword
                 }
             },
@@ -1265,7 +1383,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                                 editing,
                                 title,
                                 username,
-                                password,
+                                passwordDraft.value,
                                 url.ifBlank { null },
                                 category = category.ifBlank { null },
                                 provider = provider.ifBlank { null },
@@ -1292,7 +1410,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                             current.addLogin(
                                 title,
                                 username,
-                                password,
+                                passwordDraft.value,
                                 url.ifBlank { null },
                                 category = category.ifBlank { null },
                                 provider = provider.ifBlank { null },
@@ -1316,6 +1434,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                         status = strings.savedSecret
                     }
                     clearSecretEditor()
+                    revealedFieldName = null
                     revealedValue = ""
                     refresh(current)
                     currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
@@ -1476,10 +1595,18 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
             onUploadSelected = { secretIds ->
                 val current = session ?: return@SyncPanel
                 runAction(serverAction = true) {
-                    val pushed =
-                        current.pushSelectedPersonalRecordsTo(serverClient(), secretIds)
                     conflictAssessment = null
-                    loadRecordInventory()
+                    val pushed =
+                        SelectedRecordUploadCoordinator.upload(
+                            secretIds = secretIds,
+                            push = { current.pushSelectedPersonalRecordsTo(serverClient(), it) },
+                            refreshComparisons = {
+                                loadRecordInventory()
+                                recordInventory?.comparisons.orEmpty()
+                            },
+                            promote = current::promoteLocalRecord,
+                        )
+                    refresh(current)
                     status = strings.uploadedSelectedRecords(pushed)
                 }
             },
@@ -1622,6 +1749,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                     showTotpCode = false
                 }
                 selectedSecretId = it
+                revealedFieldName = null
                 revealedValue = ""
                 totpCode = ""
                 inspectorSheetOpen = true
@@ -1638,35 +1766,56 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
     val inspectorPanel: @Composable (Modifier) -> Unit = { modifier ->
         InspectorPanel(
             selectedSecret = selectedSecret,
+            revealedFieldName = revealedFieldName,
             revealedValue = revealedValue,
             showTotpCode = showTotpCode,
             totpCode = totpCode,
             totpSecondsRemaining = totpSecondsRemaining,
-            onReveal = {
+            onReveal = { fieldName ->
                 val current = session ?: return@InspectorPanel
                 val selected = selectedSecret ?: return@InspectorPanel
                 runAction {
                     clearSecretEditor()
                     revealedValue =
-                        if (selected.type == SecretType.LOGIN_PASSWORD.name) {
+                        if (selected.type == SecretType.LOGIN_PASSWORD.name && fieldName == "password") {
                             current.revealPassword(selected.id)
                         } else {
-                            current.revealField(
-                                selected.id,
-                                SecretFormModel.specFor(SecretType.valueOf(selected.type))
-                                    .revealFieldName,
-                            )
-                    }
-                    revealGeneration = revealLifecycle.reveal(selected.id, revealedValue, java.time.Instant.now())
+                            current.revealField(selected.id, fieldName)
+                        }
+                    revealedFieldName = fieldName
+                    revealGeneration =
+                        revealLifecycle.reveal(
+                            "${selected.id}:$fieldName",
+                            revealedValue,
+                            java.time.Instant.now(),
+                        )
                     status = strings.secretRevealed
                 }
             },
             onHide = {
                 revealLifecycle.clear()
+                revealedFieldName = null
                 revealedValue = ""
             },
-            onCopy = {
-                revealedValue.takeIf { it.isNotEmpty() }?.let {
+            onCopy = { fieldName ->
+                val selected = selectedSecret ?: return@InspectorPanel
+                val value =
+                    when {
+                        fieldName == "password" && revealedFieldName == fieldName -> revealedValue
+                        else -> {
+                            val field = selected.fields.firstOrNull { it.name == fieldName }
+                            if (field?.secret == false) field.value.orEmpty()
+                            else if (revealedFieldName == fieldName) revealedValue
+                            else ""
+                        }
+                    }
+                value.takeIf { it.isNotEmpty() }?.let {
+                    clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
+                    status = strings.copiedToClipboard
+                }
+            },
+            onCopyUsername = {
+                selectedSecret?.username?.takeIf { it.isNotEmpty() }?.let {
                     clipboardTicket = clipboardLifecycle.copy(it, java.time.Instant.now())
                     status = strings.copiedToClipboard
                 }
@@ -1692,13 +1841,15 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                 val selected = selectedSecret ?: return@InspectorPanel
                 runAction {
                     revealLifecycle.clear()
+                    revealedFieldName = null
                     revealedValue = ""
                     val snapshot = current.editSnapshot(selected.id)
                     val type = SecretType.valueOf(snapshot.type)
                     secretType = type
                     title = snapshot.title
                     username = snapshot.username
-                    password = snapshot.password
+                    passwordDraft = PasswordDraftState(snapshot.password)
+                    passwordBreachResult = PasswordBreachResult.NotChecked
                     url = snapshot.url
                     category = snapshot.category.orEmpty()
                     provider = snapshot.provider.orEmpty()
@@ -1821,6 +1972,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
             selectedMode = localUnlockStorageModel.selectedMode,
             biometricAvailability = localUnlockStorageModel.biometricAvailability,
             deviceLoginAvailable = deviceLoginAvailable,
+            providerId = localUnlockStorageModel.providerId,
         )
     val restoreTargetAvailable =
         runCatching {
@@ -1984,6 +2136,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                     clearVaultAccessState()
                     selectedSecretId = null
                     revealLifecycle.clear()
+                    revealedFieldName = null
                     revealedValue = ""
                     clearSecretEditor()
                     refresh(result.session)
@@ -2117,21 +2270,16 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                             masterPassword = ""
                             selectedSecretId = null
                             revealLifecycle.clear()
+                            revealedFieldName = null
                             revealedValue = ""
                             clearSecretEditor()
                             refresh(opened)
                             if (localUnlockDescriptor?.persistence ==
-                                    LocalLoginPersistence.BIOMETRIC &&
-                                localUnlockCredential == null
+                                    LocalLoginPersistence.BIOMETRIC
                             ) {
                                 loadLocalUnlockCredential()
                             } else {
-                                status =
-                                    if (enableDeviceLoginIfReady()) {
-                                        strings.deviceLoginEnabled
-                                    } else {
-                                        strings.vaultOpen
-                                    }
+                                status = strings.vaultOpen
                             }
                         }
                     },
@@ -2140,12 +2288,7 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                             reportUnlockError(strings.vaultFileMustNotBeBlank)
                             return@UnlockScreen
                         }
-                        if (localUnlockCredential == null && localUnlockDescriptor != null) {
-                            unlockError = null
-                            loadLocalUnlockCredential(onError = { unlockError = it })
-                        }
-                        val credential = localUnlockCredential
-                        if (credential == null) {
+                        if (localUnlockDescriptor == null) {
                             unlockError =
                                 unlockError
                                     ?: status.ifBlank { strings.deviceLoginNotConfigured }
@@ -2153,24 +2296,32 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
                         }
                         unlockError = null
                         runAction(onError = { unlockError = it }) {
-                            val opened = LocalVaultSession.openWithLocalLogin(
-                                Path.of(vaultDirectory),
-                                credential,
-                            )
-                            session?.close()
-                            session = opened
-                            vaultDirectory =
-                                vaultLocationSettings
-                                    .rememberSuccessfulVault(Path.of(vaultDirectory))
-                                    .toString()
-                            fingerprint = opened.fingerprintValue()
-                            masterPassword = ""
-                            selectedSecretId = null
-                            revealLifecycle.clear()
-                            revealedValue = ""
-                            clearSecretEditor()
-                            status = strings.vaultOpen
-                            refresh(opened)
+                            try {
+                                localUnlockCredentialManager.useExistingOnce { credential ->
+                                    localUnlockCredential = credential
+                                    val opened = LocalVaultSession.openWithLocalLogin(
+                                        Path.of(vaultDirectory),
+                                        credential,
+                                    )
+                                    session?.close()
+                                    session = opened
+                                    vaultDirectory =
+                                        vaultLocationSettings
+                                            .rememberSuccessfulVault(Path.of(vaultDirectory))
+                                            .toString()
+                                    fingerprint = opened.fingerprintValue()
+                                    masterPassword = ""
+                                    selectedSecretId = null
+                                    revealLifecycle.clear()
+                                    revealedFieldName = null
+                                    revealedValue = ""
+                                    clearSecretEditor()
+                                    status = strings.vaultOpen
+                                    refresh(opened)
+                                }
+                            } finally {
+                                localUnlockCredential = null
+                            }
                         }
                     },
                 )
@@ -2262,4 +2413,3 @@ fun KeysteadClientApp(windowHandle: () -> WinDef.HWND? = { null }) {
         )
     }
 }
-

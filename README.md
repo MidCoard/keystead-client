@@ -79,15 +79,8 @@ Portable backups contain sensitive encrypted material. Use an independent strong
 Requirements:
 
 - JDK 25 to run Gradle. Kotlin bytecode is explicitly targeted to JVM 24 because the current Kotlin compiler does not yet expose a JVM 25 target; this avoids the implicit-fallback warning while remaining runnable on JDK 25.
-- Keystead Core `0.4.4-SNAPSHOT` published to Maven Local.
+- Keystead Core `0.5.1`, resolved automatically from Maven Central.
 - Keystead Server only for connected features.
-
-Publish Core locally:
-
-```powershell
-cd D:\IdeaProjects\keystead
-.\gradlew.bat :keystead-core:publishToMavenLocal --no-daemon
-```
 
 Run the client:
 

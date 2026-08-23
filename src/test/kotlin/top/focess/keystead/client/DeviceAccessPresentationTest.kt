@@ -4,6 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import top.focess.keystead.client.i18n.EnStrings
+import top.focess.keystead.client.i18n.ZhStrings
 
 class DeviceAccessPresentationTest {
     @Test
@@ -61,6 +63,31 @@ class DeviceAccessPresentationTest {
         assertEquals(DeviceAccessMode.EXISTING_BIOMETRIC, presentation.mode)
         assertEquals(DeviceProtectionProvider.WINDOWS_HELLO, presentation.provider)
         assertFalse(presentation.showBiometricCreate)
+    }
+
+    @Test
+    fun macTouchIdProviderIsPresentedAsTouchId() {
+        val presentation =
+            DeviceAccessPresentation.derive(
+                SecureStorageUiModel(
+                    SecureStorageMode.BIOMETRIC,
+                    BiometricAvailability.AVAILABLE,
+                    providerId = "mac-touch-id",
+                    biometricActive = true,
+                ),
+                LocalLoginPersistence.BIOMETRIC,
+                credentialLoaded = true,
+            )
+
+        assertEquals(DeviceProtectionProvider.MAC_TOUCH_ID, presentation.provider)
+        assertEquals("Protected by Touch ID", EnStrings.deviceProtectionLabel(presentation.provider))
+        assertEquals("受 Touch ID 保护", ZhStrings.deviceProtectionLabel(presentation.provider))
+        assertEquals(
+            "Open this local vault with Touch ID. Local login never connects to Keystead Server.",
+            EnStrings.deviceAccessIntro(presentation.provider),
+        )
+        assertEquals("Set up Touch ID", EnStrings.createProtectedIdentity(presentation.provider))
+        assertEquals("Verify with Touch ID", EnStrings.verifyLocalLogin(presentation.provider))
     }
 
     @Test
