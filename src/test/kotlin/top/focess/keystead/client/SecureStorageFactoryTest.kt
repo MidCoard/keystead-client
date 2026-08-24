@@ -10,7 +10,11 @@ class SecureStorageFactoryTest {
     @Test
     fun windowsSelectsOnlyWindowsHelloWithoutCreatingCredential() {
         val result =
-            SecureStorageFactory("Windows 11", windowHandle = { null })
+            SecureStorageFactory(
+                "Windows 11",
+                windowHandle = { null },
+                touchIdAuthenticationReason = { "test" },
+            )
                 .biometric(Files.createTempDirectory("keystead-windows-hello-factory"), "desktop")
         val providerId = when (result) {
             is SecureStorageSelection.Available -> result.providerId
@@ -29,7 +33,13 @@ class SecureStorageFactoryTest {
                 SecureRandom(),
             ).biometric(directory, "desktop")
         assertEquals("mac-touch-id", assertIs<SecureStorageSelection.Available>(macResult).providerId)
-        assertEquals("none", assertIs<SecureStorageSelection.Unavailable>(SecureStorageFactory("Linux").biometric(directory, "desktop")).diagnostic.providerId)
+        assertEquals(
+            "none",
+            assertIs<SecureStorageSelection.Unavailable>(
+                SecureStorageFactory("Linux", touchIdAuthenticationReason = { "test" })
+                    .biometric(directory, "desktop"),
+            ).diagnostic.providerId,
+        )
     }
 
     @Test

@@ -69,6 +69,19 @@ class LocalUnlockCredentialManagerTest {
     }
 
     @Test
+    fun biometricStorageIsClosedAfterEachOneShotCredentialUse() {
+        val directory = createTempDirectory("keystead-one-shot-storage")
+        val storage = TestBiometricStorage()
+        val manager = LocalUnlockCredentialManager(directory, biometricStorage = { storage })
+
+        manager.useOrCreateOnce(SecureStorageMode.BIOMETRIC) { }
+        assertEquals(1, storage.closeCount)
+
+        manager.useExistingOnce { }
+        assertEquals(2, storage.closeCount)
+    }
+
+    @Test
     fun existingBiometricCredentialIsWipedWhenItsOneShotUseFails() {
         val directory = createTempDirectory("keystead-failed-one-shot-login")
         val storage = TestBiometricStorage()
@@ -92,10 +105,12 @@ class LocalUnlockCredentialManagerTest {
         manager.close()
     }
 
-    private class TestBiometricStorage : SecureStorage {
+    private class TestBiometricStorage : SecureStorage, AutoCloseable {
         override val capability = SecureStorageCapability.OS_BIOMETRIC_GATED
         private val values = mutableMapOf<SecureStorageKey, ByteArray>()
         var loadCount: Int = 0
+            private set
+        var closeCount: Int = 0
             private set
 
         override fun save(key: SecureStorageKey, value: ByteArray) {
@@ -113,6 +128,10 @@ class LocalUnlockCredentialManagerTest {
 
         fun resetLoadCount() {
             loadCount = 0
+        }
+
+        override fun close() {
+            closeCount += 1
         }
     }
 }

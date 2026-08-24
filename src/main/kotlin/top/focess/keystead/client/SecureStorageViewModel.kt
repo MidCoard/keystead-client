@@ -42,7 +42,7 @@ internal class SecureStorageViewModel internal constructor(
 ) : AutoCloseable {
     constructor(
         settings: SecureStorageSettings,
-        factory: SecureStorageFactory = SecureStorageFactory(),
+        factory: SecureStorageFactory,
     ) : this(settings, factory::biometric)
 
     private var biometricCandidate: SecureStorageSelection.Available? = null

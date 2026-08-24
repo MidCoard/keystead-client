@@ -6,6 +6,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class MacTouchIdHelperContractTest {
@@ -35,7 +36,7 @@ class MacTouchIdHelperContractTest {
     }
 
     @Test
-    fun unsignedHelperCanStoreAndDeleteAKeychainSecret() {
+    fun helperStoresSecretOutsideLegacyKeychainAndDeletesIt() {
         if (!System.getProperty("os.name").lowercase().contains("mac")) return
         val helper = Path.of(checkNotNull(System.getProperty("keystead.mac.touch-id.helper")))
         val account = "keystead-test-${UUID.randomUUID()}"
@@ -49,6 +50,17 @@ class MacTouchIdHelperContractTest {
                 save.exitValue(),
                 save.errorStream.readAllBytes().toString(Charsets.US_ASCII),
             )
+            val legacyLookup =
+                ProcessBuilder(
+                    "security",
+                    "find-generic-password",
+                    "-s",
+                    "top.focess.keystead.touch-id",
+                    "-a",
+                    account,
+                ).start()
+            assertTrue(legacyLookup.waitFor(15, TimeUnit.SECONDS))
+            assertNotEquals(0, legacyLookup.exitValue())
         } finally {
             val delete = ProcessBuilder(helper.toString(), "delete", account).start()
             delete.outputStream.close()

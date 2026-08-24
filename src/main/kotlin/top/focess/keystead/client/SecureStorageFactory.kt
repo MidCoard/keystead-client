@@ -23,7 +23,7 @@ class SecureStorageFactory internal constructor(
     constructor(
         osName: String = System.getProperty("os.name"),
         windowHandle: () -> WinDef.HWND? = { null },
-        touchIdAuthenticationReason: () -> String = { "Unlock Keystead with Touch ID." },
+        touchIdAuthenticationReason: () -> String,
     ) : this(
         osName,
         { normalized, directory ->

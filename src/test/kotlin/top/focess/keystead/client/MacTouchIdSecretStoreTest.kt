@@ -3,6 +3,7 @@ package top.focess.keystead.client
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import top.focess.keystead.client.i18n.EnStrings
 import top.focess.keystead.client.i18n.ZhStrings
 
@@ -26,6 +27,15 @@ class MacTouchIdSecretStoreTest {
     fun touchIdSystemNoticeHasConciseEnglishAndChineseVersions() {
         assertEquals("Unlock Keystead with Touch ID.", EnStrings.touchIdAuthenticationReason)
         assertEquals("使用 Touch ID 解锁 Keystead。", ZhStrings.touchIdAuthenticationReason)
+    }
+
+    @Test
+    fun rejectsMissingLocalizedAuthenticationReasonBeforeCallingNativeCode() {
+        val port = FakeMacTouchIdPort()
+        val store = MacTouchIdSecretStore(port) { "  " }
+
+        assertFailsWith<IllegalArgumentException> { store.load("desktop") }
+        assertEquals(null, port.lastAuthenticationReason)
     }
 
     private class FakeMacTouchIdPort : MacTouchIdPort {

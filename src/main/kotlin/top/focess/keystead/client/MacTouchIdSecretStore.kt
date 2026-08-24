@@ -14,7 +14,7 @@ internal interface MacTouchIdPort {
 
 class MacTouchIdSecretStore internal constructor(
     private val port: MacTouchIdPort,
-    private val authenticationReason: () -> String = { "Unlock Keystead with Touch ID." },
+    private val authenticationReason: () -> String,
 ) : OsSecretStore {
     override val providerId: String = "mac-touch-id"
 
@@ -32,7 +32,13 @@ class MacTouchIdSecretStore internal constructor(
     override fun load(instanceId: String): ByteArray? {
         requireInstanceId(instanceId)
         requireAvailable()
-        return port.load(instanceId, authenticationReason())?.also {
+        val localizedReason = authenticationReason()
+        require(
+            localizedReason.isNotBlank() &&
+                localizedReason.toByteArray(Charsets.UTF_8).size <= MAX_AUTHENTICATION_REASON_BYTES &&
+                localizedReason.none(Char::isISOControl),
+        ) { "Localized Touch ID authentication reason is required" }
+        return port.load(instanceId, localizedReason)?.also {
             if (it.isEmpty() || it.size > MAX_SECRET_BYTES) {
                 Wipe.wipe(it)
                 throw OsSecretStoreException(OsSecretStoreFailure.CORRUPT, "mac-touch-id-secret-invalid")
@@ -60,6 +66,7 @@ class MacTouchIdSecretStore internal constructor(
 
     private companion object {
         const val MAX_SECRET_BYTES = 4096
+        const val MAX_AUTHENTICATION_REASON_BYTES = 160
     }
 }
 

@@ -13,14 +13,17 @@ version = "1.1.1-SNAPSHOT"
 
 val isMacHost = System.getProperty("os.name").lowercase().contains("mac")
 val macTouchIdHelper = layout.buildDirectory.file("app-resources/macos/keystead-mac-secure-store")
+val unsignedMacTouchIdHelper = layout.buildDirectory.file("tmp/mac-touch-id/keystead-mac-secure-store")
 val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.0.dmg")
-val compileMacTouchIdHelper =
-    tasks.register<Exec>("compileMacTouchIdHelper") {
+val compileMacTouchIdHelperBinary =
+    tasks.register<Exec>("compileMacTouchIdHelperBinary") {
         onlyIf { isMacHost }
         val source = layout.projectDirectory.file("src/main/swift/KeysteadMacSecureStore.swift")
+        val infoPlist = layout.projectDirectory.file("src/main/swift/KeysteadMacSecureStore-Info.plist")
         inputs.file(source)
-        outputs.file(macTouchIdHelper)
-        doFirst { macTouchIdHelper.get().asFile.parentFile.mkdirs() }
+        inputs.file(infoPlist)
+        outputs.file(unsignedMacTouchIdHelper)
+        doFirst { unsignedMacTouchIdHelper.get().asFile.parentFile.mkdirs() }
         commandLine(
             "xcrun",
             "swiftc",
@@ -29,8 +32,40 @@ val compileMacTouchIdHelper =
             "LocalAuthentication",
             "-framework",
             "Security",
+            "-framework",
+            "CryptoKit",
+            "-Xlinker",
+            "-sectcreate",
+            "-Xlinker",
+            "__TEXT",
+            "-Xlinker",
+            "__info_plist",
+            "-Xlinker",
+            infoPlist.asFile.absolutePath,
             source.asFile.absolutePath,
             "-o",
+            unsignedMacTouchIdHelper.get().asFile.absolutePath,
+        )
+    }
+val compileMacTouchIdHelper =
+    tasks.register<Exec>("compileMacTouchIdHelper") {
+        onlyIf { isMacHost }
+        dependsOn(compileMacTouchIdHelperBinary)
+        inputs.file(unsignedMacTouchIdHelper)
+        outputs.file(macTouchIdHelper)
+        doFirst {
+            val target = macTouchIdHelper.get().asFile
+            target.parentFile.mkdirs()
+            unsignedMacTouchIdHelper.get().asFile.copyTo(target, overwrite = true)
+            check(target.setExecutable(true, false)) { "Could not make the macOS Touch ID helper executable" }
+        }
+        commandLine(
+            "codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--identifier",
+            "top.focess.keystead.touch-id-helper",
             macTouchIdHelper.get().asFile.absolutePath,
         )
     }
@@ -55,6 +90,7 @@ tasks.configureEach {
     if (name == "prepareAppResources") dependsOn(compileMacTouchIdHelper)
     if (name == "packageDmg") finalizedBy(fixMacDmgVolumeIcon)
     if (name == "createDistributable" && isMacHost) {
+        inputs.file(macTouchIdHelper)
         doLast {
             val packagedHelper =
                 layout.buildDirectory

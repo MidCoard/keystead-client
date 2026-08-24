@@ -66,6 +66,7 @@ class LocalUnlockCredentialManager(
 ) : AutoCloseable {
     private val metadataFile = directory.resolve("local-login.properties")
     private var current: LocalUnlockCredential? = null
+    private var oneShotBiometricStorage: SecureStorage? = null
 
     var currentPersistence: LocalLoginPersistence? = null
         private set
@@ -155,11 +156,18 @@ class LocalUnlockCredentialManager(
         action: (LocalUnlockCredential) -> T,
     ): T {
         unload()
-        val credential = load()
+        check(oneShotBiometricStorage == null) { "Local login is already in use" }
+        oneShotBiometricStorage = biometricStorage()
         return try {
-            action(credential)
+            action(load())
         } finally {
-            unload()
+            try {
+                unload()
+            } finally {
+                val storage = oneShotBiometricStorage
+                oneShotBiometricStorage = null
+                (storage as? AutoCloseable)?.close()
+            }
         }
     }
 
@@ -288,7 +296,7 @@ class LocalUnlockCredentialManager(
     }
 
     private fun requireBiometricStorage(): SecureStorage {
-        val storage = biometricStorage()
+        val storage = oneShotBiometricStorage ?: biometricStorage()
             ?: throw IllegalStateException("Biometric local login is unavailable")
         check(storage.capability == SecureStorageCapability.OS_BIOMETRIC_GATED) {
             "Biometric local login requires biometric-gated storage"
