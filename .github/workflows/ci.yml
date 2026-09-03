@@ -17,7 +17,7 @@ jobs:
           java-version: '25'
           cache: gradle
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew test --no-daemon --rerun-tasks
+      - run: xvfb-run --auto-servernum ./gradlew test --no-daemon --rerun-tasks
         working-directory: keystead-client
       - run: git diff --check
         working-directory: keystead-client

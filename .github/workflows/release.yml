@@ -7,7 +7,27 @@ on:
       - 'v*'
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: keystead-client
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run tests
+        working-directory: keystead-client
+        run: xvfb-run --auto-servernum ./gradlew test --no-daemon --rerun-tasks
+      - name: Check whitespace
+        working-directory: keystead-client
+        run: git diff --check
+
   package:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
