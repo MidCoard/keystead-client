@@ -19,7 +19,6 @@ import top.focess.keystead.model.SecretType
 import top.focess.keystead.model.SlotType
 import top.focess.keystead.model.VaultFingerprint
 import top.focess.keystead.model.KeyId
-import top.focess.keystead.service.CreateVaultRequest
 import top.focess.keystead.service.DefaultVaultService
 import top.focess.keystead.service.EncryptedSyncRecord
 import top.focess.keystead.service.SyncImportReport
@@ -816,7 +815,7 @@ class LocalVaultSession private constructor(
                         service.openVault(file, password)
                     } else {
                         file.parent?.let { Files.createDirectories(it) }
-                        service.createVault(CreateVaultRequest(file), password)
+                        service.createVault(file, password)
                     }
                 LocalVaultSession(service, handle, file)
             } finally {

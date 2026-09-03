@@ -9,12 +9,12 @@ plugins {
 }
 
 group = "top.focess"
-version = "1.1.1-SNAPSHOT"
+version = "1.1.1"
 
 val isMacHost = System.getProperty("os.name").lowercase().contains("mac")
 val macTouchIdHelper = layout.buildDirectory.file("app-resources/macos/keystead-mac-secure-store")
 val unsignedMacTouchIdHelper = layout.buildDirectory.file("tmp/mac-touch-id/keystead-mac-secure-store")
-val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.0.dmg")
+val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.1.dmg")
 val compileMacTouchIdHelperBinary =
     tasks.register<Exec>("compileMacTouchIdHelperBinary") {
         onlyIf { isMacHost }
@@ -112,7 +112,7 @@ kotlin {
 }
 
 dependencies {
-    implementation("top.focess:keystead-core:0.5.1")
+    implementation("top.focess:keystead-core:0.5.2")
     implementation(compose.desktop.currentOs)
     implementation("org.jetbrains.compose.components:components-resources:1.10.0")
     implementation("org.jetbrains.compose.material3:material3:1.9.0")
@@ -180,7 +180,7 @@ compose.desktop {
             modules("java.net.http")
             // Installer version mirrors the project release version. Bump per release.
             // macOS DMG requires MAJOR > 0; the project is now 1.x so Dmg is built.
-            packageVersion = "1.1.0"
+            packageVersion = "1.1.1"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first
