@@ -27,6 +27,7 @@ import top.focess.keystead.client.i18n.LocalStrings
 
 @Composable
 internal fun ServerRestorePanel(
+    busy: Boolean = false,
     model: ServerVaultRestoreModel,
     serverAvailability: ServerAvailability,
     onCheckServer: () -> Unit,
@@ -49,6 +50,7 @@ internal fun ServerRestorePanel(
             newMasterPassphrase == newMasterPassphraseConfirmation
     DestinationCard {
         SectionHeader(strings.restoreAnotherDevice)
+        ActionProgress(busy)
         Text(
             strings.restoreAnotherDeviceIntro,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -67,7 +69,7 @@ internal fun ServerRestorePanel(
             ->
                 Button(
                     onClick = onCreateRequest,
-                    enabled = model.canCreateRequest,
+                    enabled = model.canCreateRequest && !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(strings.createApprovalRequest)
@@ -83,7 +85,7 @@ internal fun ServerRestorePanel(
                 )
                 OutlinedButton(
                     onClick = onRefreshRequest,
-                    enabled = model.canRefreshRequest,
+                    enabled = model.canRefreshRequest && !busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(strings.checkApprovalStatus)
@@ -159,7 +161,7 @@ internal fun ServerRestorePanel(
             )
             Button(
                 onClick = onRestore,
-                enabled = model.canRestore,
+                enabled = model.canRestore && !busy,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(strings.createLocalVaultFromServer)

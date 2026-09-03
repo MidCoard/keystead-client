@@ -66,6 +66,7 @@ internal fun ServerRecoveryHub(
 
 @Composable
 internal fun VaultAccessApprovalPanel(
+    busy: Boolean = false,
     authenticated: Boolean,
     serverAvailability: ServerAvailability,
     vaultOpen: Boolean,
@@ -77,6 +78,7 @@ internal fun VaultAccessApprovalPanel(
     val strings = LocalStrings.current
     DestinationCard {
         SectionHeader(strings.approveAnotherDeviceTask)
+        ActionProgress(busy)
         Text(
             strings.approveAnotherDeviceIntro,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -123,7 +125,7 @@ internal fun VaultAccessApprovalPanel(
         }
         OutlinedButton(
             onClick = onFindPendingAccessRequest,
-            enabled = authenticated && serverAvailability.isOnline,
+            enabled = authenticated && serverAvailability.isOnline && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(strings.findPendingRequest)
@@ -134,6 +136,7 @@ internal fun VaultAccessApprovalPanel(
                 authenticated &&
                     serverAvailability.isOnline &&
                     vaultOpen &&
+                    !busy &&
                     pendingAccessRequest?.state == ServerVaultAccessRequestState.PENDING,
             modifier = Modifier.fillMaxWidth(),
         ) {

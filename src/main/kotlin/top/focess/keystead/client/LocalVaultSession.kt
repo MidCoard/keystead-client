@@ -197,8 +197,8 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ): String {
-        SecretBuffer.fromChars(username.toCharArray()).use { usernameBuffer ->
-            SecretBuffer.fromChars(password.toCharArray()).use { passwordBuffer ->
+        secretBufferFromString(username).use { usernameBuffer ->
+            secretBufferFromString(password).use { passwordBuffer ->
                 val secretId =
                     handle.saveLogin { draft ->
                         draft.title(title)
@@ -229,8 +229,8 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ) {
-        SecretBuffer.fromChars(username.toCharArray()).use { usernameBuffer ->
-            SecretBuffer.fromChars(password.toCharArray()).use { passwordBuffer ->
+        secretBufferFromString(username).use { usernameBuffer ->
+            secretBufferFromString(password).use { passwordBuffer ->
                 handle.updateLogin(SecretId(UUID.fromString(secretId))) { draft ->
                     draft.title(title)
                         .classification(SecretClassification(category, provider, software, account))
@@ -262,7 +262,7 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ): String {
-        val buffers = fields.mapValues { SecretBuffer.fromChars(it.value.toCharArray()) }
+        val buffers = fields.mapValues { secretBufferFromString(it.value) }
         return try {
             val secretId =
                 handle.saveSecret(type) { draft ->
@@ -289,7 +289,7 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ) {
-        val buffers = fields.mapValues { SecretBuffer.fromChars(it.value.toCharArray()) }
+        val buffers = fields.mapValues { secretBufferFromString(it.value) }
         return try {
             handle.updateSecret(SecretId(UUID.fromString(secretId))) { draft ->
                 draft.title(title)
@@ -368,15 +368,17 @@ class LocalVaultSession private constructor(
     }
 
     fun revealPassword(secretId: String): String {
-        val output = arrayOfNulls<CharArray>(1)
+        var output = ""
+        withPassword(secretId) { password -> output = String(password) }
+        return output
+    }
+
+    internal fun withPassword(
+        secretId: String,
+        action: (CharArray) -> Unit,
+    ) {
         handle.withLogin(SecretId(UUID.fromString(secretId))) { view ->
-            view.withPassword { password -> output[0] = password.copyOf() }
-        }
-        val chars = output[0] ?: CharArray(0)
-        return try {
-            String(chars)
-        } finally {
-            Wipe.wipe(chars)
+            view.withPassword { password -> action(password) }
         }
     }
 
@@ -776,6 +778,15 @@ class LocalVaultSession private constructor(
 
     override fun close() {
         handle.close()
+    }
+
+    private fun secretBufferFromString(value: String): SecretBuffer {
+        val chars = value.toCharArray()
+        return try {
+            SecretBuffer.fromChars(chars)
+        } finally {
+            Wipe.wipe(chars)
+        }
     }
 
     companion object {

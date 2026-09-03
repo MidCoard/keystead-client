@@ -19,6 +19,7 @@ import top.focess.keystead.client.i18n.LocalStrings
 
 @Composable
 internal fun BackupPanel(
+    busy: Boolean = false,
     vaultOpen: Boolean,
     backupPassword: String,
     onBackupPasswordChange: (String) -> Unit,
@@ -33,6 +34,7 @@ internal fun BackupPanel(
         BackupFormModel.canExport(vaultOpen, backupPassword, backupPasswordConfirmation)
     DestinationCard {
         SectionHeader(strings.destinationLabel(KeysteadDestination.BACKUP))
+        ActionProgress(busy)
         Text(
             strings.fullBackupIntro,
             style = MaterialTheme.typography.bodyMedium,
@@ -78,7 +80,7 @@ internal fun BackupPanel(
         )
         Button(
             onClick = onExportBackup,
-            enabled = exportReady,
+            enabled = exportReady && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(strings.exportBackup)
@@ -88,6 +90,7 @@ internal fun BackupPanel(
 
 @Composable
 internal fun PortableBackupRestorePanel(
+    busy: Boolean = false,
     backupPassword: String,
     onBackupPasswordChange: (String) -> Unit,
     backupPasswordConfirmation: String,
@@ -118,6 +121,7 @@ internal fun PortableBackupRestorePanel(
 
     DestinationCard {
         SectionHeader(strings.restorePortableBackup)
+        ActionProgress(busy)
         Text(
             strings.restorePortableBackupHelp,
             style = MaterialTheme.typography.bodySmall,
@@ -219,7 +223,7 @@ internal fun PortableBackupRestorePanel(
         )
         Button(
             onClick = onReviewRestore,
-            enabled = reviewReady,
+            enabled = reviewReady && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(strings.reviewBackupRestore)

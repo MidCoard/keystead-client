@@ -16,7 +16,10 @@ object SecretListFilter {
                 && matchesExact(secret.provider, query.provider)
                 && matchesExact(secret.software, query.software)
                 && matchesText(secret, query.text)
-        }
+        }.sortedWith(
+            compareBy<SecretListItem, String>(String.CASE_INSENSITIVE_ORDER) { it.title }
+                .thenBy { it.id },
+        )
 
     private fun matchesType(secret: SecretListItem, type: String?): Boolean =
         type.isNullOrBlank() || secret.type.equals(type.trim(), ignoreCase = true)

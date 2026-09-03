@@ -214,6 +214,7 @@ internal object InspectorFieldPresentation {
 @Composable
 internal fun SecretListPanel(
     secrets: List<SecretListItem>,
+    breachFindings: Map<String, Int> = emptyMap(),
     totalSecretCount: Int,
     query: SecretListQuery,
     onQueryTextChange: (String) -> Unit,
@@ -287,6 +288,21 @@ internal fun SecretListPanel(
         if (expiredCount > 0 || dueSoonCount > 0) {
             ExpiryReminderBanner(expiredCount = expiredCount, dueSoonCount = dueSoonCount)
         }
+        if (breachFindings.isNotEmpty()) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    strings.passwordBreachAuditFound(breachFindings.size),
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
         if (secrets.isEmpty()) {
             EmptyState()
         } else if (groupingMode == SecretGroupingMode.NONE) {
@@ -295,7 +311,11 @@ internal fun SecretListPanel(
                 modifier = Modifier.weight(1f),
             ) {
                 items(secrets) { secret ->
-                    SecretRow(secret, secret.id == selectedSecretId) { onSelect(secret.id) }
+                    SecretRow(
+                        secret,
+                        secret.id == selectedSecretId,
+                        breachFindings[secret.id],
+                    ) { onSelect(secret.id) }
                 }
             }
         } else {
@@ -309,7 +329,11 @@ internal fun SecretListPanel(
                         GroupHeader(group.label, group.secrets.size)
                     }
                     items(group.secrets, key = { "secret-${it.id}" }) { secret ->
-                        SecretRow(secret, secret.id == selectedSecretId) { onSelect(secret.id) }
+                        SecretRow(
+                            secret,
+                            secret.id == selectedSecretId,
+                            breachFindings[secret.id],
+                        ) { onSelect(secret.id) }
                     }
                 }
             }
@@ -417,7 +441,12 @@ private fun GroupHeader(label: String, count: Int) {
 }
 
 @Composable
-private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> Unit) {
+private fun SecretRow(
+    secret: SecretListItem,
+    selected: Boolean,
+    breachCount: Int?,
+    onClick: () -> Unit,
+) {
     val strings = LocalStrings.current
     val expiryState = SecretExpiry.state(secret.expiry)
     val expiryBadge =
@@ -426,9 +455,11 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
         } else {
             null
         }
+    val breachLabel = breachCount?.let(strings::passwordLeakBadge)
     val rowDescription = buildString {
         append(strings.secretRowLabel(secret.title, typeLabel(secret.type, strings)))
         expiryBadge?.let { append(", ${it.label(strings)}") }
+        breachLabel?.let { append(", $it") }
     }
     Card(
         modifier =
@@ -488,6 +519,14 @@ private fun SecretRow(secret: SecretListItem, selected: Boolean, onClick: () -> 
                             },
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (breachLabel != null) {
+                    Text(
+                        breachLabel,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
             }

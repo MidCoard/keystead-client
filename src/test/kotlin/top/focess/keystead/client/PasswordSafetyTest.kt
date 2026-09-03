@@ -38,10 +38,16 @@ class PasswordSafetyTest {
         }
         server.start()
         try {
-            val count =
-                PwnedPasswordChecker(
-                    URI("http://127.0.0.1:${server.address.port}/range/"),
-                ).breachCount(password.toCharArray())
+            val passwordChars = password.toCharArray()
+            val query =
+                try {
+                    PwnedPasswordChecker(
+                        URI("http://127.0.0.1:${server.address.port}/range/"),
+                    ).prepare(passwordChars)
+                } finally {
+                    java.util.Arrays.fill(passwordChars, '\u0000')
+                }
+            val count = query.use { it.breachCount() }
 
             assertEquals(42, count)
             assertEquals("/range/${fullHash.take(5)}", request[0]?.uri?.path)

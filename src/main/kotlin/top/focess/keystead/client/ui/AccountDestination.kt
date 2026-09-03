@@ -26,6 +26,7 @@ import top.focess.keystead.client.i18n.LocalStrings
 
 @Composable
 internal fun AccountPanel(
+    busy: Boolean = false,
     authenticated: Boolean,
     serverAvailability: ServerAvailability,
     onCheckServer: () -> Unit,
@@ -47,7 +48,7 @@ internal fun AccountPanel(
 ) {
     val strings = LocalStrings.current
     val serverAvailable = serverAvailability.isOnline
-    val connectionEditable = SyncFormModel.canEditConnection(authenticated, serverAvailable)
+    val connectionEditable = SyncFormModel.canEditConnection(authenticated, serverAvailable) && !busy
     val submitReady =
         AccountAuthPresentation.canSubmit(
             mode = authState.mode,
@@ -62,6 +63,7 @@ internal fun AccountPanel(
 
     DestinationCard {
         SectionHeader(strings.destinationLabel(KeysteadDestination.ACCOUNT))
+        ActionProgress(busy)
         ConnectedAvailabilityNotice(serverAvailability, onCheckServer)
 
         if (!authenticated) {
@@ -166,7 +168,7 @@ internal fun AccountPanel(
                     } else {
                         onCreateAccount
                     },
-                enabled = submitReady,
+                enabled = submitReady && !busy,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
@@ -203,14 +205,14 @@ internal fun AccountPanel(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onRefresh, enabled = serverReady, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onRefresh, enabled = serverReady && !busy, modifier = Modifier.weight(1f)) {
                     Text(strings.refreshSession)
                 }
-                OutlinedButton(onClick = onLogout, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onLogout, enabled = !busy, modifier = Modifier.weight(1f)) {
                     Text(strings.signOut)
                 }
             }
-            OutlinedButton(onClick = onLogoutAll, enabled = serverReady, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = onLogoutAll, enabled = serverReady && !busy, modifier = Modifier.fillMaxWidth()) {
                 Text(strings.signOutEverywhere)
             }
         }

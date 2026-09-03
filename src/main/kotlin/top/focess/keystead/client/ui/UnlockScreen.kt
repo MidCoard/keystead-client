@@ -46,6 +46,7 @@ import top.focess.keystead.client.i18n.LocalStrings
 
 @Composable
 fun UnlockScreen(
+    busy: Boolean = false,
     vaultDirectory: String,
     masterPassword: String,
     errorMessage: String?,
@@ -102,6 +103,7 @@ fun UnlockScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                ActionProgress(busy)
                 if (VaultUnlockMethodPolicy.shouldOfferDeviceLogin(deviceUnlock)) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -143,7 +145,7 @@ fun UnlockScreen(
                         }
                         Button(
                             onClick = onOpenWithDeviceKey,
-                            enabled = deviceLoginReady,
+                            enabled = deviceLoginReady && !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(strings.unlockWithDeviceLogin)
@@ -163,7 +165,7 @@ fun UnlockScreen(
                         )
                         Button(
                             onClick = onOpen,
-                            enabled = masterPassword.isNotBlank(),
+                            enabled = masterPassword.isNotBlank() && !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(strings.openOrCreateVault)

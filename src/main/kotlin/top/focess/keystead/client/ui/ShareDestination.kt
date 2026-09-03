@@ -36,6 +36,7 @@ import top.focess.keystead.share.ShareContents
 
 @Composable
 internal fun SharePanel(
+    busy: Boolean = false,
     authenticated: Boolean,
     serverAvailability: ServerAvailability,
     onCheckServer: () -> Unit,
@@ -82,6 +83,7 @@ internal fun SharePanel(
         )
     DestinationCard {
         SectionHeader(strings.shareTitle)
+        ActionProgress(busy)
         ConnectedAvailabilityNotice(serverAvailability, onCheckServer)
         if (!authenticated) {
             Text(
@@ -152,7 +154,7 @@ internal fun SharePanel(
             Switch(checked = burnAfterReading, onCheckedChange = onBurnChange, enabled = authenticated)
             Text(strings.burnAfterReading, style = MaterialTheme.typography.bodyMedium)
         }
-        Button(onClick = onMint, enabled = mintReady, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = onMint, enabled = mintReady && !busy, modifier = Modifier.fillMaxWidth()) {
             Text(strings.mintShare)
         }
         mintedShare?.let { minted ->
@@ -228,7 +230,7 @@ internal fun SharePanel(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
-        Button(onClick = onRedeem, enabled = redeemReady, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = onRedeem, enabled = redeemReady && !busy, modifier = Modifier.fillMaxWidth()) {
             Text(strings.redeemShare)
         }
         redeemedContents?.let { contents ->
@@ -266,7 +268,7 @@ internal fun SharePanel(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
                     onClick = onRefreshShares,
-                    enabled = serverAvailable,
+                    enabled = serverAvailable && !busy,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(strings.refresh)
@@ -313,7 +315,7 @@ internal fun SharePanel(
                                 }
                                 OutlinedButton(
                                     onClick = { onDeleteShare(summary.code) },
-                                    enabled = serverAvailable,
+                                    enabled = serverAvailable && !busy,
                                     modifier = Modifier.fillMaxWidth(),
                                     colors =
                                         ButtonDefaults.outlinedButtonColors(

@@ -22,6 +22,7 @@ internal enum class SettingsScope {
  * @param secureStorageMode the secure-storage backend mode, or null for the default
  * @param localLoginStorageMode the local-login storage backend mode, or null for the default
  * @param vaultLocationUri the active vault file URI (global only), or null
+ * @param autoLockMinutes inactivity timeout before an open vault is locked, or null for one minute
  * @param vaultScopes per-vault config-scope preference: normalized vault path -> GLOBAL/VAULT_LOCAL.
  *   Always global; the vault-local settings.json never carries this. Defaults to GLOBAL per vault.
  */
@@ -33,6 +34,7 @@ internal data class ClientSettings(
     var localLoginStorageMode: String? = null,
     var localLoginStorageProviderId: String? = null,
     var vaultLocationUri: String? = null,
+    var autoLockMinutes: Int? = null,
     var vaultScopes: Map<String, String>? = null,
 ) {
     /**
@@ -57,6 +59,7 @@ internal data class ClientSettings(
         secureStorageProviderId = vaultLocal.secureStorageProviderId ?: secureStorageProviderId,
         localLoginStorageMode = vaultLocal.localLoginStorageMode ?: localLoginStorageMode,
         localLoginStorageProviderId = vaultLocal.localLoginStorageProviderId ?: localLoginStorageProviderId,
+        autoLockMinutes = vaultLocal.autoLockMinutes ?: autoLockMinutes,
     )
 }
 

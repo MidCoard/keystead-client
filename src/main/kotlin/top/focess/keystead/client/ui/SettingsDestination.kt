@@ -14,6 +14,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.SettingsPresentation
 import top.focess.keystead.client.SettingsScope
+import top.focess.keystead.client.AutoLockTimeout
 import top.focess.keystead.client.i18n.AppLocale
 import top.focess.keystead.client.i18n.LocalStrings
 
@@ -23,6 +24,8 @@ internal fun SettingsPanel(
     presentation: SettingsPresentation,
     locale: AppLocale,
     onLocaleChange: (AppLocale) -> Unit,
+    autoLockTimeout: AutoLockTimeout = AutoLockTimeout.default,
+    onAutoLockTimeoutChange: (AutoLockTimeout) -> Unit = {},
     settingsScope: SettingsScope,
     onSettingsScopeChange: (SettingsScope) -> Unit,
     configFilePath: String,
@@ -49,6 +52,24 @@ internal fun SettingsPanel(
                     selected = locale == option,
                     onClick = { onLocaleChange(option) },
                     label = { Text(option.nativeName) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        GroupLabel(strings.groupAutoLock)
+        Text(
+            strings.autoLockHelp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AutoLockTimeout.entries.forEach { timeout ->
+                KeysteadChoiceChip(
+                    selected = autoLockTimeout == timeout,
+                    onClick = { onAutoLockTimeoutChange(timeout) },
+                    label = { Text(strings.autoLockMinutes(timeout.minutes)) },
                     modifier = Modifier.weight(1f),
                 )
             }

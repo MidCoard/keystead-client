@@ -39,6 +39,7 @@ class PersonalVaultRecordInventoryTest {
         assertEquals("ac6hbddox4BkPm4eukfXjPBspNdI9c-J4MOaOB2fs6g", history.computedContentHash)
         assertEquals("GQDqtsAoSD1xJlme5vUN4NJ5B7XGX6kFJFgLSw-YUrA", history.profileCiphertextHash)
         assertEquals("I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU", history.envelopeCiphertextHash)
+        assertEquals(RemoteRecordVerification.VERIFIED, history.verification)
     }
 
     @Test
@@ -122,7 +123,55 @@ class PersonalVaultRecordInventoryTest {
         assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.statusOf("content-conflict"))
         assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.statusOf("invalid-hash"))
         assertEquals(1, inventory.invalidRemoteRecords)
+        assertEquals(0, inventory.legacyRemoteRecords)
         assertFalse(inventory.remoteHistory.single { it.serverSequence == 8L }.hashValid)
+        assertEquals(
+            RemoteRecordVerification.INVALID,
+            inventory.remoteHistory.single { it.serverSequence == 8L }.verification,
+        )
+    }
+
+    @Test
+    fun legacyHistoryDoesNotTurnAMatchedCurrentRecordIntoAHashMismatch() {
+        val record = encrypted("upgraded", 3, "payload")
+        val legacy =
+            remote(1, record).copy(
+                eventId = "legacy-kve1-event-id",
+                contentKey = "",
+            )
+        val current = remote(2, record)
+
+        val inventory = PersonalVaultRecordInventory.compare(listOf(record), listOf(legacy, current))
+
+        assertEquals(RecordComparisonStatus.MATCHED, inventory.statusOf("upgraded"))
+        assertEquals(0, inventory.invalidRemoteRecords)
+        assertEquals(1, inventory.legacyRemoteRecords)
+        assertEquals(
+            RemoteRecordVerification.LEGACY_UNVERIFIABLE,
+            inventory.remoteHistory.single { it.serverSequence == 1L }.verification,
+        )
+        assertEquals(
+            RemoteRecordVerification.VERIFIED,
+            inventory.remoteHistory.single { it.serverSequence == 2L }.verification,
+        )
+    }
+
+    @Test
+    fun legacyLatestRecordIsUpgradeableWithoutBeingReportedAsCorrupt() {
+        val record = encrypted("legacy-only", 2, "payload")
+        val legacy =
+            remote(1, record).copy(
+                eventId = "legacy-kve1-event-id",
+                contentKey = "",
+            )
+
+        val inventory = PersonalVaultRecordInventory.compare(listOf(record), listOf(legacy))
+        val comparison = inventory.comparisons.orEmpty().single()
+
+        assertEquals(RecordComparisonStatus.LEGACY_UNVERIFIABLE, comparison.status)
+        assertFalse(SyncUploadConflictResolver.needsPromotion(comparison))
+        assertEquals(0, inventory.invalidRemoteRecords)
+        assertEquals(1, inventory.legacyRemoteRecords)
     }
 
     @Test

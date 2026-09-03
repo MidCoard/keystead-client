@@ -28,6 +28,7 @@ import top.focess.keystead.client.i18n.LocalStrings
 
 @Composable
 internal fun LocalLoginPanel(
+    busy: Boolean = false,
     secureStorage: SecureStorageUiModel,
     presentation: DeviceAccessPresentation,
     credentialLoaded: Boolean,
@@ -42,6 +43,7 @@ internal fun LocalLoginPanel(
 
     DestinationCard {
         SectionHeader(strings.destinationLabel(KeysteadDestination.DEVICE_ACCESS))
+        ActionProgress(busy)
         Text(
             strings.deviceAccessIntro(presentation.provider),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -102,7 +104,7 @@ internal fun LocalLoginPanel(
                     if (!credentialLoaded) {
                         Button(
                             onClick = onLoadCredential,
-                            enabled = biometricAvailable,
+                            enabled = biometricAvailable && !busy,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(strings.verifyLocalLogin(presentation.provider))
@@ -111,7 +113,7 @@ internal fun LocalLoginPanel(
                 DeviceAccessMode.NEW_BIOMETRIC ->
                     Button(
                         onClick = onCreateBiometricCredential,
-                        enabled = biometricAvailable,
+                        enabled = biometricAvailable && !busy,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(strings.createProtectedIdentity(presentation.provider))
@@ -122,6 +124,7 @@ internal fun LocalLoginPanel(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 OutlinedButton(
                     onClick = onRemoveLocalLogin,
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                     colors =
                         ButtonDefaults.outlinedButtonColors(

@@ -114,11 +114,16 @@ kotlin {
 dependencies {
     implementation("top.focess:keystead-core:0.5.1")
     implementation(compose.desktop.currentOs)
+    implementation("org.jetbrains.compose.components:components-resources:1.10.0")
     implementation("org.jetbrains.compose.material3:material3:1.9.0")
     implementation("org.jetbrains.compose.material:material-icons-core:1.7.3")
     implementation("com.google.code.gson:gson:2.13.2")
     implementation("net.java.dev.jna:jna-platform:5.19.0")
     testImplementation(kotlin("test"))
+}
+
+compose.resources {
+    packageOfResClass = "top.focess.keystead.client.generated.resources"
 }
 
 tasks.test {

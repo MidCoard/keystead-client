@@ -18,7 +18,7 @@ class MacTouchIdSecretStoreTest {
 
         assertEquals("mac-touch-id", store.providerId)
         assertContentEquals(secret, store.load("desktop"))
-        assertEquals("使用 Touch ID 解锁 Keystead。", port.lastAuthenticationReason)
+        assertEquals("使用 Touch ID 解锁 Keystead", port.lastAuthenticationReason)
         store.delete("desktop")
         assertEquals(null, store.load("desktop"))
     }
@@ -26,7 +26,7 @@ class MacTouchIdSecretStoreTest {
     @Test
     fun touchIdSystemNoticeHasConciseEnglishAndChineseVersions() {
         assertEquals("Unlock Keystead with Touch ID.", EnStrings.touchIdAuthenticationReason)
-        assertEquals("使用 Touch ID 解锁 Keystead。", ZhStrings.touchIdAuthenticationReason)
+        assertEquals("使用 Touch ID 解锁 Keystead", ZhStrings.touchIdAuthenticationReason)
     }
 
     @Test

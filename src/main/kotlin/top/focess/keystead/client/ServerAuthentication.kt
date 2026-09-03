@@ -5,6 +5,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import top.focess.keystead.memory.Wipe
 
@@ -21,6 +22,7 @@ class KeysteadServerAuthClient(
             val body = credentialsBody(username, passwordCopy)
             val request =
                 HttpRequest.newBuilder(URI.create("$root/api/v1/users"))
+                    .timeout(Duration.ofSeconds(30))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build()
@@ -57,6 +59,7 @@ class KeysteadServerAuthClient(
     private fun sendForTokens(path: String, body: String): ServerAuthTokens {
         val request =
             HttpRequest.newBuilder(URI.create("$root/api/v1/auth/$path"))
+                .timeout(Duration.ofSeconds(30))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build()
@@ -165,6 +168,7 @@ class ServerAuthSession internal constructor(
         try {
             val request =
                 HttpRequest.newBuilder(URI.create("$root/api/v1/auth/logout-all"))
+                    .timeout(Duration.ofSeconds(30))
                     .header("Authorization", headerValue())
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .build()
@@ -223,6 +227,7 @@ class ServerAuthSession internal constructor(
 
     private fun authRequest(path: String, body: String): HttpRequest =
         HttpRequest.newBuilder(URI.create("$root/api/v1/auth/$path"))
+            .timeout(Duration.ofSeconds(30))
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build()

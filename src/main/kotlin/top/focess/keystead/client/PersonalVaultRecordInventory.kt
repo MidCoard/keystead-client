@@ -13,7 +13,14 @@ internal enum class RecordComparisonStatus {
     SERVER_ONLY,
     LOCAL_NEWER,
     SERVER_NEWER,
+    LEGACY_UNVERIFIABLE,
     HASH_MISMATCH,
+}
+
+internal enum class RemoteRecordVerification {
+    VERIFIED,
+    LEGACY_UNVERIFIABLE,
+    INVALID,
 }
 
 internal object SyncUploadConflictResolver {
@@ -72,10 +79,13 @@ internal data class RemoteRecordHistoryEntry(
     val computedContentHash: String?,
     val profileCiphertextHash: String,
     val envelopeCiphertextHash: String,
-    val hashValid: Boolean,
+    val verification: RemoteRecordVerification,
     val deleted: Boolean,
     val createdAt: Instant,
-)
+) {
+    val hashValid: Boolean
+        get() = verification == RemoteRecordVerification.VERIFIED
+}
 
 internal data class PersonalVaultRecordInventory(
     val serverFingerprint: String?,
@@ -84,6 +94,7 @@ internal data class PersonalVaultRecordInventory(
     val remoteHistory: List<RemoteRecordHistoryEntry>,
     val comparisons: List<RecordComparisonEntry>?,
     val invalidRemoteRecords: Int,
+    val legacyRemoteRecords: Int,
 ) {
     companion object {
         fun compare(
@@ -113,7 +124,7 @@ internal data class PersonalVaultRecordInventory(
                             computedContentHash = computedContentHash,
                             profileCiphertextHash = RecordDisplayHash.of(remote.encryptedProfile),
                             envelopeCiphertextHash = RecordDisplayHash.of(remote.envelope),
-                            hashValid = remote.contentKey.isNotBlank() && remote.eventId == computedContentHash,
+                            verification = remote.verification(computedContentHash),
                             deleted = remote.deleted,
                             createdAt = remote.createdAt,
                         )
@@ -133,7 +144,10 @@ internal data class PersonalVaultRecordInventory(
                 vaultMismatch = vaultMismatch,
                 remoteHistory = history,
                 comparisons = comparisons,
-                invalidRemoteRecords = history.count { !it.hashValid },
+                invalidRemoteRecords = history.count { it.verification == RemoteRecordVerification.INVALID },
+                legacyRemoteRecords = history.count {
+                    it.verification == RemoteRecordVerification.LEGACY_UNVERIFIABLE
+                },
             )
         }
 
@@ -163,13 +177,12 @@ internal data class PersonalVaultRecordInventory(
         ): RecordComparisonEntry {
             val localHash = local?.let(SyncRecordEventId::of)
             val remoteHash = remote?.contentHash()
-            val remoteHashValid =
-                remote == null || (remote.contentKey.isNotBlank() && remote.eventId == remoteHash)
             val status =
                 when {
-                    !remoteHashValid -> RecordComparisonStatus.HASH_MISMATCH
-                    local == null -> RecordComparisonStatus.SERVER_ONLY
                     remote == null -> RecordComparisonStatus.LOCAL_ONLY
+                    remote.contentKey.isBlank() -> RecordComparisonStatus.LEGACY_UNVERIFIABLE
+                    remote.eventId != remoteHash -> RecordComparisonStatus.HASH_MISMATCH
+                    local == null -> RecordComparisonStatus.SERVER_ONLY
                     local.revision() > remote.revision -> RecordComparisonStatus.LOCAL_NEWER
                     local.revision() < remote.revision -> RecordComparisonStatus.SERVER_NEWER
                     // KVE2 event ids are stable across re-exports of unchanged content, so
@@ -206,6 +219,13 @@ internal object RecordDisplayHash {
                 .digest(value.toByteArray(StandardCharsets.UTF_8)),
         )
 }
+
+private fun PersonalVaultRecord.verification(computedContentHash: String?): RemoteRecordVerification =
+    when {
+        contentKey.isBlank() -> RemoteRecordVerification.LEGACY_UNVERIFIABLE
+        eventId == computedContentHash -> RemoteRecordVerification.VERIFIED
+        else -> RemoteRecordVerification.INVALID
+    }
 
 private fun PersonalVaultRecord.contentHash(): String? {
     // Legacy pre-KVE2 events carry an empty content key and can never verify.

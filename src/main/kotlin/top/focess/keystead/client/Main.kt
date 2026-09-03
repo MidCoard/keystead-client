@@ -29,6 +29,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -63,6 +64,40 @@ private val defaultClientDirectory: Path = ClientDataDirectory.resolve()
 private val defaultVaultDirectory: String =
     defaultClientDirectory.resolve("vaults").resolve("vault.kvault").toString()
 private const val desktopStorageInstance = "keystead-desktop"
+
+private data class VaultUiSnapshot(
+    val secrets: List<SecretListItem>,
+    val deviceKeySlots: List<DeviceKeySlot>,
+)
+
+private data class RecordInventorySnapshot(
+    val serverRecords: List<PersonalVaultRecord>,
+    val inventory: PersonalVaultRecordInventory,
+)
+
+private data class DeviceEnrollmentResult(
+    val enabled: Boolean,
+    val slots: List<DeviceKeySlot>,
+)
+
+private data class LocalUnlockLoadResult(
+    val descriptor: LocalUnlockCredentialDescriptor?,
+    val storageModel: SecureStorageUiModel,
+    val enrollment: DeviceEnrollmentResult?,
+)
+
+private data class OpenedVaultResult(
+    val session: LocalVaultSession,
+    val rememberedPath: Path,
+    val fingerprint: String,
+    val snapshot: VaultUiSnapshot,
+)
+
+private data class RestoredServerAuth(
+    val session: ServerAuthSession,
+    val baseUrl: String,
+    val username: String,
+)
 
 fun main(args: Array<String>) = application {
     val brandImage =
@@ -192,6 +227,20 @@ fun KeysteadClientApp(
         locale = newLocale
         languageSettings.save(newLocale)
     }
+    val autoLockSettings = remember(effectiveSettingsStore) {
+        AutoLockSettings(effectiveSettingsStore)
+    }
+    var autoLockTimeout by remember(effectiveSettingsStore) {
+        mutableStateOf(autoLockSettings.load())
+    }
+    val userIdleTracker = remember { UserIdleTracker() }
+    val recordUserActivity = remember(userIdleTracker) {
+        { userIdleTracker.recordActivity() }
+    }
+    DisposableEffect(userIdleTracker) {
+        val listener = DesktopUserActivityListener(recordUserActivity)
+        onDispose(listener::close)
+    }
     val strings = locale.strings
     val currentTouchIdAuthenticationReason by
         rememberUpdatedState(strings.touchIdAuthenticationReason)
@@ -231,8 +280,38 @@ fun KeysteadClientApp(
     var username by remember { mutableStateOf("") }
     var passwordDraft by remember { mutableStateOf(PasswordDraftState()) }
     var passwordBreachResult by remember { mutableStateOf<PasswordBreachResult>(PasswordBreachResult.NotChecked) }
+    var passwordCheckToken by remember { mutableStateOf<Any?>(null) }
     val passwordChecker = remember { PwnedPasswordChecker() }
+    val passwordBreachAuditor = remember(passwordChecker) { PasswordBreachAuditor(passwordChecker) }
+    var savedPasswordBreachFindings by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     val uiScope = rememberCoroutineScope()
+    var autoLockSaveJob by remember(effectiveSettingsStore) {
+        mutableStateOf<kotlinx.coroutines.Job?>(null)
+    }
+    DisposableEffect(effectiveSettingsStore) {
+        onDispose { autoLockSaveJob?.cancel() }
+    }
+    val actionGate = remember { UiActionGate<UiActionGroup>() }
+    var activeActionGroups by remember { mutableStateOf(emptySet<UiActionGroup>()) }
+    val vaultActionGroups =
+        remember {
+            setOf(
+                UiActionGroup.VAULT,
+                UiActionGroup.SYNC,
+                UiActionGroup.RECOVERY,
+                UiActionGroup.DEVICE_LOGIN,
+                UiActionGroup.BACKUP,
+            )
+        }
+    val serverActionGroups =
+        remember {
+            setOf(
+                UiActionGroup.ACCOUNT,
+                UiActionGroup.SYNC,
+                UiActionGroup.SHARE,
+                UiActionGroup.RECOVERY,
+            )
+        }
     var url by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var provider by remember { mutableStateOf("") }
@@ -352,6 +431,7 @@ fun KeysteadClientApp(
         username = ""
         passwordDraft = PasswordDraftState()
         passwordBreachResult = PasswordBreachResult.NotChecked
+        passwordCheckToken = null
         url = ""
         category = ""
         provider = ""
@@ -360,6 +440,41 @@ fun KeysteadClientApp(
         expiry = ""
         structuredFields = emptyMap()
         editingSecretId = null
+    }
+
+    fun checkPasswordDraft() {
+        if (
+            passwordDraft.value.isEmpty() ||
+            passwordBreachResult == PasswordBreachResult.Checking
+        ) return
+        val checkedPassword = passwordDraft.value.toCharArray()
+        val query =
+            try {
+                passwordChecker.prepare(checkedPassword)
+            } finally {
+                Wipe.wipe(checkedPassword)
+            }
+        val checkToken = Any()
+        passwordCheckToken = checkToken
+        passwordBreachResult = PasswordBreachResult.Checking
+        uiScope.launch {
+            val result =
+                try {
+                    val count = query.use { withContext(Dispatchers.IO) { it.breachCount() } }
+                    if (count == 0) PasswordBreachResult.NotFound
+                    else PasswordBreachResult.Found(count)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    PasswordBreachResult.Failed
+                }
+            if (passwordCheckToken === checkToken) {
+                passwordBreachResult = result
+                if (result is PasswordBreachResult.Found) {
+                    actionFeedbackState.error(strings.passwordFoundInBreaches(result.count))
+                }
+            }
+        }
     }
 
     fun reportUnlockError(message: String) {
@@ -400,11 +515,13 @@ fun KeysteadClientApp(
         recordInventory = null
     }
 
-    fun beginVaultAccessExchange(authenticated: ServerAuthSession): String? {
-        try {
-            val request =
+    fun beginVaultAccessExchange(
+        authenticated: ServerAuthSession,
+        baseUrl: String,
+    ): Pair<EphemeralVaultAccessSession, ServerVaultAccessRequest> {
+        val request =
                 vaultAccessLifecycle.requestByUser {
-                    val exchange = EphemeralVaultAccessSession.create(serverUrl)
+                    val exchange = EphemeralVaultAccessSession.create(baseUrl)
                     try {
                         StartedAccessRequest(
                             exchange,
@@ -415,18 +532,11 @@ fun KeysteadClientApp(
                         throw error
                     }
                 }
-            vaultAccessExchangeSession = vaultAccessLifecycle.exchange
-            ownVaultAccessRequest = request
-            return null
-        } catch (error: Exception) {
-            clearVaultAccessState()
-            return error.message ?: error::class.simpleName ?: "Unknown error"
-        }
+        return requireNotNull(vaultAccessLifecycle.exchange) to request
     }
 
-    fun restoreServerSession() {
-        val store = serverSessionStore() ?: return
-        val persisted = store.load() ?: return
+    fun restoreServerSession(store: RefreshTokenStore): RestoredServerAuth? {
+        val persisted = store.load() ?: return null
         val tokenSink: (String, java.time.Instant) -> Unit = { refreshToken, expiresAt ->
             store.save(
                 PersistedAuthSession(
@@ -444,59 +554,78 @@ fun KeysteadClientApp(
             java.net.http.HttpClient.newBuilder()
                 .connectTimeout(java.time.Duration.ofSeconds(10))
                 .build()
-        try {
-            val session =
-                KeysteadServerAuthClient(persisted.baseUrl, restoreHttp).restore(
-                    persisted.refreshToken,
-                    persisted.refreshTokenExpiresAt,
-                    tokenSink,
-                    onRevoked,
-                )
-            serverAuthSession = session
-            serverUrl = persisted.baseUrl
-            serverUsername = persisted.username
-            clearVaultAccessState()
-            serverAvailability = ServerAvailability.ONLINE
-            status = strings.signedInRestored
-        } catch (error: KeysteadAuthenticationException) {
-            serverAvailability = ServerAvailability.ONLINE
-            store.clear()
-            actionFeedbackState.error(strings.serverSessionExpired)
-        } catch (error: Exception) {
-            if (error is java.io.IOException) {
-                serverAvailability = ServerAvailability.OFFLINE
-            }
-            actionFeedbackState.error(
-                strings.couldNotRestoreServerSession(error.message ?: error::class.simpleName ?: ""),
+        val restoredSession =
+            KeysteadServerAuthClient(persisted.baseUrl, restoreHttp).restore(
+                persisted.refreshToken,
+                persisted.refreshTokenExpiresAt,
+                tokenSink,
+                onRevoked,
             )
-        }
+        return RestoredServerAuth(
+            session = restoredSession,
+            baseUrl = persisted.baseUrl,
+            username = persisted.username,
+        )
     }
 
     LaunchedEffect(Unit) {
         try {
-            localUnlockStorageModel =
-                localUnlockStorageViewModel.initialize(
-                    defaultClientDirectory.resolve("local-login-secure-storage"),
-                    "$desktopStorageInstance-local-login",
-                )
-            localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-            localUnlockDescriptor?.let { descriptor ->
-                if (localUnlockStorageModel.selectedMode == null) {
-                    localUnlockStorageModel =
-                        localUnlockStorageViewModel.adoptExistingLocalLogin(
-                            descriptor.persistence,
+            val (storageModel, descriptor) =
+                withContext(Dispatchers.IO) {
+                    var model =
+                        localUnlockStorageViewModel.initialize(
+                            defaultClientDirectory.resolve("local-login-secure-storage"),
+                            "$desktopStorageInstance-local-login",
                         )
+                    val loadedDescriptor = localUnlockCredentialManager.descriptor()
+                    loadedDescriptor?.let {
+                        if (model.selectedMode == null) {
+                            model =
+                        localUnlockStorageViewModel.adoptExistingLocalLogin(
+                                    it.persistence,
+                        )
+                        }
+                    }
+                    model to loadedDescriptor
                 }
-            }
+            localUnlockStorageModel = storageModel
+            localUnlockDescriptor = descriptor
         } catch (error: Exception) {
             actionFeedbackState.error(error.message ?: strings.localLoginCredentialUnavailable)
         }
         secureStorageModel =
-            secureStorageViewModel.initialize(
-                defaultClientDirectory.resolve("secure-storage"),
-                desktopStorageInstance,
-            )
-        restoreServerSession()
+            withContext(Dispatchers.IO) {
+                secureStorageViewModel.initialize(
+                    defaultClientDirectory.resolve("secure-storage"),
+                    desktopStorageInstance,
+                )
+            }
+        serverSessionStore()?.let { store ->
+            try {
+                val restored = withContext(Dispatchers.IO) { restoreServerSession(store) }
+                if (restored != null) {
+                    serverAuthSession = restored.session
+                    serverUrl = restored.baseUrl
+                    serverUsername = restored.username
+                    clearVaultAccessState()
+                    serverAvailability = ServerAvailability.ONLINE
+                    status = strings.signedInRestored
+                }
+            } catch (error: KeysteadAuthenticationException) {
+                serverAvailability = ServerAvailability.ONLINE
+                withContext(Dispatchers.IO) { store.clear() }
+                actionFeedbackState.error(strings.serverSessionExpired)
+            } catch (error: Exception) {
+                if (error is java.io.IOException) {
+                    serverAvailability = ServerAvailability.OFFLINE
+                }
+                actionFeedbackState.error(
+                    strings.couldNotRestoreServerSession(
+                        error.message ?: error::class.simpleName ?: "",
+                    ),
+                )
+            }
+        }
     }
     LaunchedEffect(vaultDirectory, session, deviceKeySlots, localUnlockDescriptor) {
         val descriptor = localUnlockDescriptor
@@ -575,7 +704,10 @@ fun KeysteadClientApp(
         val current = session ?: return@LaunchedEffect
         val selected = secrets.firstOrNull { it.id == selectedSecretId } ?: return@LaunchedEffect
         if (SecretType.valueOf(selected.type) != SecretType.MFA_SECRET) return@LaunchedEffect
-        val uri = runCatching { current.revealField(selected.id, "otpauthUri") }.getOrNull()
+        val uri =
+            withContext(Dispatchers.IO) {
+                runCatching { current.revealField(selected.id, "otpauthUri") }.getOrNull()
+            }
         val period = MfaTotp.period(uri)
         var lastCounter = -1L
         while (true) {
@@ -583,17 +715,56 @@ fun KeysteadClientApp(
             val counter = now.epochSecond / period
             if (counter != lastCounter) {
                 lastCounter = counter
-                val seed = runCatching { current.revealField(selected.id, "seed") }.getOrNull()
+                val seed =
+                    withContext(Dispatchers.IO) {
+                        runCatching { current.revealField(selected.id, "seed") }.getOrNull()
+                    }
                 totpCode = seed?.let { MfaTotp.currentCode(it, uri, now) }.orEmpty()
             }
             totpSecondsRemaining = MfaTotp.secondsRemaining(period, now)
             delay(1_000)
         }
     }
+    val savedPasswordAuditKey =
+        remember(secrets) {
+            secrets
+                .filter { it.type == SecretType.LOGIN_PASSWORD.name }
+                .map { it.id to it.revision }
+        }
+    LaunchedEffect(session, savedPasswordAuditKey) {
+        val current = session
+        if (current == null || savedPasswordAuditKey.isEmpty()) {
+            savedPasswordBreachFindings = emptyMap()
+            return@LaunchedEffect
+        }
+        val secretsToCheck = secrets.filter { it.type == SecretType.LOGIN_PASSWORD.name }
+        delay(750)
+        val result =
+            withContext(Dispatchers.IO) {
+                passwordBreachAuditor.audit(current, secretsToCheck)
+            }
+        if (session === current) {
+            val activeSecretIds = secretsToCheck.mapTo(hashSetOf()) { it.id }
+            val previousFindings = savedPasswordBreachFindings
+            val retainedFindings =
+                previousFindings.filterKeys { it in activeSecretIds && it !in result.checkedSecretIds }
+            savedPasswordBreachFindings = retainedFindings + result.findings
+            val newlyDetected = result.findings.any { (id, count) -> previousFindings[id] != count }
+            if (newlyDetected) {
+                actionFeedbackState.error(strings.passwordBreachAuditFound(result.findings.size))
+            }
+        }
+    }
 
-    fun refresh(current: LocalVaultSession) {
-        secrets = current.listSecrets()
-        deviceKeySlots = current.deviceSlots()
+    fun readVaultUiSnapshot(current: LocalVaultSession): VaultUiSnapshot =
+        VaultUiSnapshot(
+            secrets = current.listSecrets(),
+            deviceKeySlots = current.deviceSlots(),
+        )
+
+    fun applyVaultUiSnapshot(snapshot: VaultUiSnapshot) {
+        secrets = snapshot.secrets
+        deviceKeySlots = snapshot.deviceKeySlots
         if (selectedSecretId !in secrets.map { it.id }) {
             selectedSecretId = null
             revealedFieldName = null
@@ -602,6 +773,7 @@ fun KeysteadClientApp(
     }
 
     fun lockVault(nextStatus: String = strings.vaultLocked) {
+        if (activeActionGroups.any(vaultActionGroups::contains)) return
         session?.close()
         session = null
         localUnlockCredentialManager.unload()
@@ -637,9 +809,28 @@ fun KeysteadClientApp(
         inspectorSheetOpen = false
         actionFeedbackState.info(nextStatus)
         recordInventory = null
+        savedPasswordBreachFindings = emptyMap()
         pendingSyncComparison = null
         syncAccept.clear()
         unlockError = null
+    }
+
+    LaunchedEffect(session, autoLockTimeout) {
+        val openedSession = session ?: return@LaunchedEffect
+        userIdleTracker.recordActivity()
+        while (session === openedSession) {
+            delay(500)
+            if (
+                AutoLockPolicy.shouldLock(
+                    vaultOpen = session === openedSession,
+                    idleTimeoutReached = userIdleTracker.isIdleFor(autoLockTimeout.duration),
+                    vaultOperationActive = activeActionGroups.any(vaultActionGroups::contains),
+                )
+            ) {
+                lockVault(strings.vaultAutoLocked)
+                return@LaunchedEffect
+            }
+        }
     }
 
     DisposableEffect(desktopController) {
@@ -647,91 +838,154 @@ fun KeysteadClientApp(
         onDispose { desktopController.onLockVault = {} }
     }
 
-    fun runAction(
+    fun <T> runAction(
+        group: UiActionGroup,
         onError: ((String) -> Unit)? = null,
         serverAction: Boolean = false,
-        action: () -> Unit,
+        isCurrent: () -> Boolean = { true },
+        onDiscard: (T) -> Unit = {},
+        onFinally: () -> Unit = {},
+        work: () -> T,
+        onSuccess: (T) -> Unit,
     ) {
-        try {
-            action()
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(
-                        serverAvailability,
-                        error = null,
-                    )
+        val conflicts =
+            buildSet {
+                add(group)
+                if (group in vaultActionGroups) addAll(vaultActionGroups)
+                if (group in serverActionGroups) addAll(serverActionGroups)
             }
-        } catch (error: KeysteadRevisionConflictException) {
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
-            }
-            conflictAssessment = ConflictAssessment.from(error, strings)
-            actionFeedbackState.error(SyncStatusFormatter.messageFor(error, strings))
-        } catch (error: KeysteadAccountConflictException) {
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
-            }
-            val message = strings.serverUserAlreadyExists
-            actionFeedbackState.error(message)
-            onError?.invoke(message)
-        } catch (error: KeysteadAuthenticationException) {
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
-            }
-            serverAuthSession?.close()
-            serverAuthSession = null
-            val message = strings.serverCredentialsRejected
-            actionFeedbackState.error(message)
-            onError?.invoke(message)
-        } catch (error: java.io.IOException) {
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
-            }
-            val message = strings.couldNotReachServer(error::class.simpleName ?: "IOException")
-            actionFeedbackState.error(message)
-            onError?.invoke(message)
-        } catch (error: PersonalVaultMismatchException) {
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
-            }
-            val message =
-                strings.personalVaultMismatch(error.serverFingerprint, error.localFingerprint)
-            actionFeedbackState.error(message)
-            onError?.invoke(message)
-            runCatching {
-                val remote = serverAuthSession?.client()?.listAllPersonalRecords() ?: return@runCatching
+        if (!actionGate.tryStart(group, conflicts)) return
+        activeActionGroups = activeActionGroups + group
+        uiScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { work() }
+                if (isCurrent()) {
+                    onSuccess(result)
+                    if (serverAction) {
+                        serverAvailability =
+                            ServerAvailabilityTransitions.afterServerAction(
+                                serverAvailability,
+                                error = null,
+                            )
+                    }
+                } else {
+                    onDiscard(result)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: KeysteadRevisionConflictException) {
+                if (!isCurrent()) return@launch
+                if (serverAction) {
+                    serverAvailability =
+                        ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+                }
+                conflictAssessment = ConflictAssessment.from(error, strings)
+                actionFeedbackState.error(SyncStatusFormatter.messageFor(error, strings))
+            } catch (error: KeysteadAccountConflictException) {
+                if (!isCurrent()) return@launch
+                if (serverAction) {
+                    serverAvailability =
+                        ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+                }
+                val message = strings.serverUserAlreadyExists
+                actionFeedbackState.error(message)
+                onError?.invoke(message)
+            } catch (error: KeysteadAuthenticationException) {
+                if (!isCurrent()) return@launch
+                if (serverAction) {
+                    serverAvailability =
+                        ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+                }
+                serverAuthSession?.close()
+                serverAuthSession = null
+                val message = strings.serverCredentialsRejected
+                actionFeedbackState.error(message)
+                onError?.invoke(message)
+            } catch (error: java.io.IOException) {
+                if (!isCurrent()) return@launch
+                if (serverAction) {
+                    serverAvailability =
+                        ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+                }
+                val message = strings.couldNotReachServer(error::class.simpleName ?: "IOException")
+                actionFeedbackState.error(message)
+                onError?.invoke(message)
+            } catch (error: PersonalVaultMismatchException) {
+                if (!isCurrent()) return@launch
+                if (serverAction) {
+                    serverAvailability =
+                        ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+                }
+                val message =
+                    strings.personalVaultMismatch(error.serverFingerprint, error.localFingerprint)
+                actionFeedbackState.error(message)
+                onError?.invoke(message)
+                val authenticated = serverAuthSession
                 val current = session
-                recordInventory =
-                    PersonalVaultRecordInventory.compare(
-                        localRecords = current?.currentPersonalRecords(),
-                        remoteRecords = remote,
-                        localFingerprint = current?.fingerprintValue(),
-                    )
+                val snapshot =
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            val remote = authenticated?.client()?.listAllPersonalRecords()
+                                ?: return@withContext null
+                            RecordInventorySnapshot(
+                                remote,
+                                PersonalVaultRecordInventory.compare(
+                                    localRecords = current?.currentPersonalRecords(),
+                                    remoteRecords = remote,
+                                    localFingerprint = current?.fingerprintValue(),
+                                ),
+                            )
+                        }
+                    }.getOrNull()
+                if (snapshot != null && serverAuthSession === authenticated && session === current) {
+                    serverRecords = snapshot.serverRecords
+                    recordInventory = snapshot.inventory
+                }
+            } catch (error: KeysteadServerException) {
+                if (!isCurrent()) return@launch
+                if (serverAction) {
+                    serverAvailability =
+                        ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
+                }
+                val message = error.message ?: error::class.simpleName.orEmpty()
+                actionFeedbackState.error(message)
+                onError?.invoke(message)
+            } catch (error: Exception) {
+                if (!isCurrent()) return@launch
+                val message = error.message ?: error::class.simpleName.orEmpty()
+                actionFeedbackState.error(message)
+                onError?.invoke(message)
+            } finally {
+                try {
+                    onFinally()
+                } finally {
+                    actionGate.finish(group)
+                    activeActionGroups = activeActionGroups - group
+                }
             }
-        } catch (error: KeysteadServerException) {
-            if (serverAction) {
-                serverAvailability =
-                    ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
-            }
-            val message = error.message ?: error::class.simpleName.orEmpty()
-            actionFeedbackState.error(message)
-            onError?.invoke(message)
-        } catch (error: Exception) {
-            val message = error.message ?: error::class.simpleName.orEmpty()
-            actionFeedbackState.error(message)
-            onError?.invoke(message)
         }
+    }
+
+    fun actionBusy(group: UiActionGroup): Boolean {
+        val conflicts =
+            buildSet {
+                add(group)
+                if (group in vaultActionGroups) addAll(vaultActionGroups)
+                if (group in serverActionGroups) addAll(serverActionGroups)
+            }
+        return activeActionGroups.any(conflicts::contains)
     }
 
     fun performDeleteSecret(secretId: String) {
         val current = session ?: return
-        runAction {
+        runAction(
+            group = UiActionGroup.VAULT,
+            isCurrent = { session === current },
+            work = {
             current.delete(secretId)
+                readVaultUiSnapshot(current)
+            },
+        ) { snapshot ->
             if (selectedSecretId == secretId) {
                 selectedSecretId = null
                 revealLifecycle.clear()
@@ -744,47 +998,66 @@ fun KeysteadClientApp(
                 clearSecretEditor()
             }
             status = strings.deletedSecret
-            refresh(current)
+            applyVaultUiSnapshot(snapshot)
         }
     }
 
-    fun serverClient(): KeysteadServerClient =
-        serverAuthSession?.client()
-            ?: throw IllegalStateException(strings.serverLoginRequiredFirst)
-
-    fun loadRecordInventory() {
-        val current = session
-        val remote = serverClient().listAllPersonalRecords()
-        serverRecords = remote
-        recordInventory =
+    fun loadRecordInventory(
+        current: LocalVaultSession?,
+        client: KeysteadServerClient,
+    ): RecordInventorySnapshot {
+        val remote = client.listAllPersonalRecords()
+        return RecordInventorySnapshot(
+            serverRecords = remote,
+            inventory =
             PersonalVaultRecordInventory.compare(
                 localRecords = current?.currentPersonalRecords(),
                 remoteRecords = remote,
                 localFingerprint = current?.fingerprintValue(),
-            )
+            ),
+        )
+    }
+
+    fun applyRecordInventory(snapshot: RecordInventorySnapshot) {
+        serverRecords = snapshot.serverRecords
+        recordInventory = snapshot.inventory
     }
 
     fun performRemoveServerRecords(secretIds: Set<String>) {
         if (secretIds.isEmpty()) return
-        runAction(serverAction = true) {
+        val current = session
+        val authenticated = serverAuthSession ?: return
+        val client = authenticated.client()
+        runAction(
+            group = UiActionGroup.SYNC,
+            serverAction = true,
+            isCurrent = { session === current && serverAuthSession === authenticated },
+            work = {
             val removedEvents =
                 secretIds.sumOf { secretId ->
-                    serverClient().deletePersonalRecordHistory(secretId).deletedEvents
+                        client.deletePersonalRecordHistory(secretId).deletedEvents
                 }
-            loadRecordInventory()
+                removedEvents to loadRecordInventory(current, client)
+            },
+        ) { (removedEvents, snapshot) ->
+            applyRecordInventory(snapshot)
             status = strings.removedServerRecords(secretIds.size, removedEvents)
         }
     }
 
-    fun authenticateServer(password: CharArray): ServerAuthSession {
-        val store = serverSessionStore()
+    fun authenticateServer(
+        baseUrl: String,
+        username: String,
+        password: CharArray,
+        store: RefreshTokenStore?,
+    ): ServerAuthSession {
         val tokenSink: ((String, java.time.Instant) -> Unit)? =
             store?.let { s ->
                 { refreshToken, expiresAt ->
                     s.save(
                         PersistedAuthSession(
-                            serverUrl,
-                            serverUsername,
+                            baseUrl,
+                            username,
                             refreshToken,
                             expiresAt,
                         ),
@@ -792,31 +1065,34 @@ fun KeysteadClientApp(
                 }
             }
         val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
-        return KeysteadServerAuthClient(serverUrl)
-            .login(serverUsername, password, tokenSink, onRevoked)
+        return KeysteadServerAuthClient(baseUrl)
+            .login(username, password, tokenSink, onRevoked)
     }
 
     fun loginToServer() {
         val passwordChars = serverPassword.toCharArray()
+        val expectedUrl = serverUrl
+        val expectedUsername = serverUsername
+        val store = serverSessionStore()
         accountAuthUiState = accountAuthUiState.onInputChanged()
-        try {
-            runAction(
-                onError = { message ->
-                    accountAuthUiState = accountAuthUiState.withFailure(message)
-                },
-                serverAction = true,
-            ) {
-                val authenticated = authenticateServer(passwordChars)
-                serverAuthSession?.close()
-                serverAuthSession = authenticated
-                clearVaultAccessState()
-                accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
-                status = strings.signedInToServer
-            }
-        } finally {
-            Wipe.wipe(passwordChars)
+        runAction(
+            group = UiActionGroup.ACCOUNT,
+            onError = { message ->
+                accountAuthUiState = accountAuthUiState.withFailure(message)
+            },
+            serverAction = true,
+            isCurrent = { serverUrl == expectedUrl && serverUsername == expectedUsername },
+            onDiscard = ServerAuthSession::close,
+            onFinally = { Wipe.wipe(passwordChars) },
+            work = { authenticateServer(expectedUrl, expectedUsername, passwordChars, store) },
+        ) { authenticated ->
+            serverAuthSession?.close()
+            serverAuthSession = authenticated
+            clearVaultAccessState()
+            accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
             serverPassword = ""
             serverPasswordConfirmation = ""
+            status = strings.signedInToServer
         }
     }
 
@@ -837,24 +1113,27 @@ fun KeysteadClientApp(
         if (session == null || current != target) return
 
         lockVault()
-        try {
-            val deleted = VaultFileDeletionService().delete(target)
-            runCatching { vaultLocationSettings.clear() }
+        runAction(
+            group = UiActionGroup.VAULT,
+            work = {
+                val deleted = VaultFileDeletionService().delete(target)
+                runCatching { vaultLocationSettings.clear() }
+                deleted
+            },
+        ) { deleted ->
             vaultDirectory = defaultVaultDirectory
             status = strings.vaultFileDeleted(deleted.fileName.toString())
-        } catch (error: Exception) {
-            actionFeedbackState.error(
-                strings.vaultFileDeleteFailed(
-                    error.message ?: error::class.simpleName.orEmpty(),
-                ),
-            )
         }
     }
 
-    fun enableDeviceLoginIfReady(credential: LocalUnlockCredential): Boolean {
-        val current = session ?: return false
-        val descriptor = localUnlockDescriptor ?: return false
-        if (!localUnlockCredentialManager.canEnrollVaultKey) return false
+    fun enrollDeviceLoginIfReady(
+        current: LocalVaultSession?,
+        descriptor: LocalUnlockCredentialDescriptor?,
+        credential: LocalUnlockCredential,
+    ): DeviceEnrollmentResult? {
+        current ?: return null
+        descriptor ?: return null
+        if (!localUnlockCredentialManager.canEnrollVaultKey) return null
         val vaultFingerprint = current.fingerprintValue()
         val currentSlots = current.deviceSlots()
         if (
@@ -864,9 +1143,7 @@ fun KeysteadClientApp(
                 descriptor.keyFingerprint,
             )
         ) {
-            deviceKeySlots = currentSlots
-            deviceLoginAvailable = true
-            return false
+            return DeviceEnrollmentResult(enabled = false, slots = currentSlots)
         }
         val localSlot = current.replaceLocalLogin(credential)
         localLoginEnrollmentStore.remember(
@@ -874,66 +1151,102 @@ fun KeysteadClientApp(
             slotKeyId = localSlot,
             credentialFingerprint = descriptor.keyFingerprint,
         )
-        deviceKeySlots = current.deviceSlots()
-        deviceLoginAvailable = true
-        return true
+        return DeviceEnrollmentResult(enabled = true, slots = current.deviceSlots())
     }
 
     fun performRemoveDeviceLogin() {
         val current = session ?: return
-        runAction {
+        runAction(
+            group = UiActionGroup.DEVICE_LOGIN,
+            isCurrent = { session === current },
+            work = {
             val vaultFingerprint = current.fingerprintValue()
             current.removeDeviceLogin()
             localLoginEnrollmentStore.clear(vaultFingerprint)
-            deviceKeySlots = current.deviceSlots()
+                current.deviceSlots()
+            },
+        ) { slots ->
+            deviceKeySlots = slots
             deviceLoginAvailable = false
             status = strings.deviceLoginRemoved
         }
     }
 
     fun loadLocalUnlockCredential(onError: ((String) -> Unit)? = null) {
-        runAction(onError = onError) {
+        val current = session
+        val initialStorageModel = localUnlockStorageModel
+        runAction(
+            group = UiActionGroup.DEVICE_LOGIN,
+            onError = onError,
+            isCurrent = { session === current },
+            work = {
             val descriptor =
                 localUnlockCredentialManager.descriptor()
                     ?: throw IllegalStateException(strings.deviceLoginNotConfigured)
-            if (localUnlockStorageModel.selectedMode == null) {
-                localUnlockStorageModel =
+                val storageModel =
+                    if (initialStorageModel.selectedMode == null) {
                     localUnlockStorageViewModel.adoptExistingLocalLogin(
                         descriptor.persistence,
                     )
-            }
-            try {
-                val enabled =
-                    localUnlockCredentialManager.useExistingOnce { credential ->
-                        localUnlockCredential = credential
-                        enableDeviceLoginIfReady(credential)
+                    } else {
+                        initialStorageModel
                     }
-                localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-                status =
-                    if (enabled) strings.deviceLoginEnabled else strings.localLoginReadyStatus
-            } finally {
-                localUnlockCredential = null
+                val enrollment =
+                    localUnlockCredentialManager.useExistingOnce { credential ->
+                        enrollDeviceLoginIfReady(current, descriptor, credential)
+                    }
+                LocalUnlockLoadResult(
+                    descriptor = localUnlockCredentialManager.descriptor(),
+                    storageModel = storageModel,
+                    enrollment = enrollment,
+                )
+            },
+        ) { result ->
+            localUnlockStorageModel = result.storageModel
+            localUnlockDescriptor = result.descriptor
+            result.enrollment?.let {
+                deviceKeySlots = it.slots
+                deviceLoginAvailable = true
             }
+            status =
+                if (result.enrollment?.enabled == true) {
+                    strings.deviceLoginEnabled
+                } else {
+                    strings.localLoginReadyStatus
+                }
         }
     }
 
     fun createBiometricLocalLogin() {
-        runAction {
-            check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
-            localUnlockStorageViewModel.selectBiometric()
-            localUnlockStorageModel = localUnlockStorageViewModel.model
-            try {
-                val enabled =
+        check(localUnlockDescriptor == null) { strings.identityStorageCannotChange }
+        val current = session
+        runAction(
+            group = UiActionGroup.DEVICE_LOGIN,
+            isCurrent = { session === current && localUnlockDescriptor == null },
+            work = {
+                localUnlockStorageViewModel.selectBiometric()
+                val storageModel = localUnlockStorageViewModel.model
+                var descriptor: LocalUnlockCredentialDescriptor? = null
+                val enrollment =
                     localUnlockCredentialManager.useOrCreateOnce(SecureStorageMode.BIOMETRIC) { credential ->
-                        localUnlockCredential = credential
-                        localUnlockDescriptor = localUnlockCredentialManager.descriptor()
-                        enableDeviceLoginIfReady(credential)
+                        descriptor = localUnlockCredentialManager.descriptor()
+                        enrollDeviceLoginIfReady(current, descriptor, credential)
                     }
-                status =
-                    if (enabled) strings.deviceLoginEnabled else strings.localLoginReadyStatus
-            } finally {
-                localUnlockCredential = null
+                LocalUnlockLoadResult(descriptor, storageModel, enrollment)
+            },
+        ) { result ->
+            localUnlockStorageModel = result.storageModel
+            localUnlockDescriptor = result.descriptor
+            result.enrollment?.let {
+                deviceKeySlots = it.slots
+                deviceLoginAvailable = true
             }
+            status =
+                if (result.enrollment?.enabled == true) {
+                    strings.deviceLoginEnabled
+                } else {
+                    strings.localLoginReadyStatus
+                }
         }
     }
 
@@ -945,26 +1258,48 @@ fun KeysteadClientApp(
 
     fun performPullAndRetry() {
         val current = session ?: return
-        runAction(serverAction = true) {
-            val state = syncStateStore()
-            val pulled = current.pullPendingPersonalRecordsFrom(serverClient(), state)
-            val pushed = current.pushPendingPersonalRecordsTo(serverClient(), state)
+        val authenticated = serverAuthSession ?: return
+        val client = authenticated.client()
+        val state = syncStateStore()
+        runAction(
+            group = UiActionGroup.SYNC,
+            serverAction = true,
+            isCurrent = { session === current && serverAuthSession === authenticated },
+            work = {
+                val pulled = current.pullPendingPersonalRecordsFrom(client, state)
+                val pushed = current.pushPendingPersonalRecordsTo(client, state)
+                Triple(pulled, pushed, readVaultUiSnapshot(current))
+            },
+        ) { (pulled, pushed, vaultSnapshot) ->
             conflictAssessment = null
             status = strings.pulledAndRepushed(pulled.imported, pushed)
             if (pulled.rejected.isNotEmpty()) {
                 actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
             }
-            refresh(current)
+            applyVaultUiSnapshot(vaultSnapshot)
         }
     }
 
     fun performPull() {
         val current = session ?: return
-        runAction(serverAction = true) {
-            val state = syncStateStore()
-            val pulled = current.pullPendingPersonalRecordsFrom(serverClient(), state)
+        val authenticated = serverAuthSession ?: return
+        val client = authenticated.client()
+        val state = syncStateStore()
+        runAction(
+            group = UiActionGroup.SYNC,
+            serverAction = true,
+            isCurrent = { session === current && serverAuthSession === authenticated },
+            work = {
+                val pulled = current.pullPendingPersonalRecordsFrom(client, state)
+                Triple(
+                    pulled,
+                    readVaultUiSnapshot(current),
+                    loadRecordInventory(current, client),
+                )
+            },
+        ) { (pulled, vaultSnapshot, inventorySnapshot) ->
             conflictAssessment = null
-            loadRecordInventory()
+            applyRecordInventory(inventorySnapshot)
             status =
                 strings.pulledRecords(
                     pulled.imported,
@@ -973,8 +1308,7 @@ fun KeysteadClientApp(
             if (pulled.rejected.isNotEmpty()) {
                 actionFeedbackState.error(strings.rejectedServerRecords(pulled.rejected.size))
             }
-            refresh(current)
-            loadRecordInventory()
+            applyVaultUiSnapshot(vaultSnapshot)
         }
     }
 
@@ -984,7 +1318,11 @@ fun KeysteadClientApp(
         val remote = serverRecords
         val comparisons = inventory?.comparisons
         if (inventory == null || comparisons == null) return
-        runAction(serverAction = true) {
+        runAction(
+            group = UiActionGroup.SYNC,
+            serverAction = true,
+            isCurrent = { session === current && recordInventory === inventory },
+            work = {
             val items =
                 comparisons
                     .filter {
@@ -1010,6 +1348,9 @@ fun KeysteadClientApp(
                             serverRecord = serverRecord,
                         )
                     }
+                items
+            },
+        ) { items ->
             syncAccept.clear()
             items.forEach { syncAccept[it.secretId] = false }
             pendingSyncComparison = items
@@ -1021,15 +1362,28 @@ fun KeysteadClientApp(
         pendingSyncComparison = null
         syncAccept.clear()
         if (items.isEmpty() || current == null) return
-        runAction(serverAction = true) {
+        val authenticated = serverAuthSession ?: return
+        val client = authenticated.client()
+        runAction(
+            group = UiActionGroup.SYNC,
+            serverAction = true,
+            isCurrent = { session === current && serverAuthSession === authenticated },
+            work = {
             val report = current.importSelectedSyncRecords(items.map { it.serverRecord })
+                Triple(
+                    report,
+                    readVaultUiSnapshot(current),
+                    loadRecordInventory(current, client),
+                )
+            },
+        ) { (report, vaultSnapshot, inventorySnapshot) ->
             conflictAssessment = null
             status = strings.pulledRecords(report.imported, report.imported.toString())
             if (report.rejected.isNotEmpty()) {
                 actionFeedbackState.error(strings.rejectedServerRecords(report.rejected.size))
             }
-            refresh(current)
-            loadRecordInventory()
+            applyVaultUiSnapshot(vaultSnapshot)
+            applyRecordInventory(inventorySnapshot)
         }
     }
 
@@ -1094,13 +1448,21 @@ fun KeysteadClientApp(
             } else {
                 java.io.File(selected.parentFile, selected.name + ".ksbackup")
             }
-        runAction {
+        val password = backupPassword.toCharArray()
+        runAction(
+            group = UiActionGroup.BACKUP,
+            isCurrent = { session === current },
+            onFinally = { Wipe.wipe(password) },
+            work = {
             java.io.FileOutputStream(target).use { output ->
-                VaultBackup.export(current, backupPassword.toCharArray(), output)
+                    VaultBackup.export(current, password, output)
             }
+                target.name
+            },
+        ) { targetName ->
             backupPassword = ""
             backupPasswordConfirmation = ""
-            status = strings.exportedBackupTo(target.name)
+            status = strings.exportedBackupTo(targetName)
         }
     }
 
@@ -1172,39 +1534,51 @@ fun KeysteadClientApp(
         }
         val source = selection.source ?: return
         val target = selection.target ?: return
-        runAction {
+        val backupPassphrase = backupPassword.toCharArray()
+        val newMasterPassphrase = backupNewMasterPassphrase.toCharArray()
+        runAction(
+            group = UiActionGroup.BACKUP,
+            onFinally = {
+                Wipe.wipe(backupPassphrase)
+                Wipe.wipe(newMasterPassphrase)
+            },
+            onDiscard = { it.session.close() },
+            work = {
             val restored =
                 Files.newInputStream(source).use { input ->
                     VaultBackup.restore(
                         target,
                         input,
-                        backupPassword.toCharArray(),
-                        backupNewMasterPassphrase.toCharArray(),
+                            backupPassphrase,
+                            newMasterPassphrase,
                     )
                 }
-            var adopted = false
             try {
                 val remembered = vaultLocationSettings.rememberSuccessfulVault(target)
+                    OpenedVaultResult(
+                        session = restored,
+                        rememberedPath = remembered,
+                        fingerprint = restored.fingerprintValue(),
+                        snapshot = readVaultUiSnapshot(restored),
+                    )
+                } catch (error: Exception) {
+                    restored.close()
+                    throw error
+                }
+            },
+        ) { result ->
                 session?.close()
-                session = restored
-                adopted = true
-                vaultDirectory = remembered.toString()
-                fingerprint = restored.fingerprintValue()
+                session = result.session
+                vaultDirectory = result.rememberedPath.toString()
+                fingerprint = result.fingerprint
                 selectedSecretId = null
                 revealLifecycle.clear()
                 revealedFieldName = null
                 revealedValue = ""
                 clearSecretEditor()
-                refresh(restored)
+                applyVaultUiSnapshot(result.snapshot)
                 if (localUnlockDescriptor != null) {
-                    try {
-                        localUnlockCredentialManager.useExistingOnce { credential ->
-                            localUnlockCredential = credential
-                            enableDeviceLoginIfReady(credential)
-                        }
-                    } finally {
-                        localUnlockCredential = null
-                    }
+                    loadLocalUnlockCredential()
                 }
                 backupPassword = ""
                 backupPasswordConfirmation = ""
@@ -1215,11 +1589,6 @@ fun KeysteadClientApp(
                 currentDestination =
                     top.focess.keystead.client.ui.KeysteadDestination.SECRETS
                 status = strings.restoredBackupTo(target.fileName.toString())
-            } finally {
-                if (!adopted) {
-                    restored.close()
-                }
-            }
         }
     }
 
@@ -1236,7 +1605,7 @@ fun KeysteadClientApp(
 
     val addPanel: @Composable () -> Unit = {
         AddSecretPanel(
-            enabled = session != null,
+            enabled = session != null && !actionBusy(UiActionGroup.VAULT),
             selectedType = secretType,
             onSelectedTypeChange = {
                 if (it != secretType) {
@@ -1259,6 +1628,7 @@ fun KeysteadClientApp(
             onPasswordChange = {
                 passwordDraft = passwordDraft.edited(it)
                 passwordBreachResult = PasswordBreachResult.NotChecked
+                passwordCheckToken = null
             },
             passwordVisible = passwordDraft.visible,
             onPasswordVisibilityChange = {
@@ -1266,32 +1636,17 @@ fun KeysteadClientApp(
             },
             passwordStrength = PasswordStrengthEvaluator.evaluate(passwordDraft.value),
             passwordBreachResult = passwordBreachResult,
-            onCheckPassword = {
-                val checkedPassword = passwordDraft.value
-                if (checkedPassword.isNotEmpty()) {
-                    passwordBreachResult = PasswordBreachResult.Checking
-                    uiScope.launch {
-                        val chars = checkedPassword.toCharArray()
-                        val result =
-                            try {
-                                val count = withContext(Dispatchers.IO) { passwordChecker.breachCount(chars) }
-                                if (count == 0) PasswordBreachResult.NotFound
-                                else PasswordBreachResult.Found(count)
-                            } catch (_: Exception) {
-                                PasswordBreachResult.Failed
-                            } finally {
-                                Wipe.wipe(chars)
-                            }
-                        if (passwordDraft.value == checkedPassword) passwordBreachResult = result
-                    }
+            onCheckPassword = { checkPasswordDraft() },
+            onPasswordEditingFinished = { checkPasswordDraft() },
+            onGeneratePassword = { options ->
+                passwordDraft = PasswordDraftState()
+                passwordBreachResult = PasswordBreachResult.NotChecked
+                passwordCheckToken = null
+                PasswordDraftGenerator.generate(options) { generated ->
+                    passwordDraft = passwordDraft.generated(String(generated))
                 }
-            },
-            onGeneratePassword = {
-                runAction {
-                    passwordDraft = passwordDraft.generated(PasswordDraftGenerator.generate())
-                    passwordBreachResult = PasswordBreachResult.NotChecked
-                    status = strings.generatedPassword
-                }
+                status = strings.generatedPassword
+                checkPasswordDraft()
             },
             url = url,
             onUrlChange = { url = it },
@@ -1310,8 +1665,7 @@ fun KeysteadClientApp(
                 structuredFields = structuredFields + (name to value)
             },
             onGenerateApiToken = {
-                runAction {
-                    val prefix =
+                val prefix =
                         when {
                             provider.equals("github", ignoreCase = true) -> "ghp"
                             software.equals("github.com", ignoreCase = true) -> "ghp"
@@ -1321,45 +1675,56 @@ fun KeysteadClientApp(
                     draft.software?.let { software = it }
                     structuredFields = structuredFields + draft.fields
                     status = strings.generatedApiToken
-                }
             },
             onGenerateSshKey = {
-                runAction {
-                    val draft = SshKeyDraftGenerator.generate(account.ifBlank { title.ifBlank { null } })
+                val identity = account.ifBlank { title.ifBlank { null } }
+                runAction(
+                    group = UiActionGroup.VAULT,
+                    work = { SshKeyDraftGenerator.generate(identity) },
+                ) { draft ->
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
                     status = strings.generatedSshKey
                 }
             },
             onGenerateGpgKey = {
-                runAction {
-                    val passphrase =
+                val passphrase =
                         structuredFields["passphrase"]?.takeIf { it.isNotBlank() }
                             ?: PasswordDraftGenerator.generate()
-                    val draft =
+                val passphraseChars = passphrase.toCharArray()
+                val identity = account.ifBlank { title.ifBlank { "Keystead User" } }
+                runAction(
+                    group = UiActionGroup.VAULT,
+                    onFinally = { Wipe.wipe(passphraseChars) },
+                    work = {
                         GpgKeyDraftGenerator.generate(
-                            identity = account.ifBlank { title.ifBlank { "Keystead User" } },
-                            passphrase = passphrase.toCharArray(),
+                                identity = identity,
+                                passphrase = passphraseChars,
                         )
+                    },
+                ) { draft ->
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
                     status = strings.generatedGpgKey
                 }
             },
             onGenerateCertificate = {
-                runAction {
-                    val draft =
+                val commonName = account.ifBlank { title.ifBlank { "keystead.local" } }
+                runAction(
+                    group = UiActionGroup.VAULT,
+                    work = {
                         CertificateDraftGenerator.generate(
-                            commonName = account.ifBlank { title.ifBlank { "keystead.local" } },
+                                commonName = commonName,
                         )
+                    },
+                ) { draft ->
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
                     status = strings.generatedCertificate
                 }
             },
             onGenerateMfaSecret = {
-                runAction {
-                    val draft =
+                val draft =
                         MfaSecretDraftGenerator.generate(
                             issuer = title.ifBlank { "Keystead" },
                             accountName = account.ifBlank { title.ifBlank { "account" } },
@@ -1367,7 +1732,6 @@ fun KeysteadClientApp(
                     software = draft.software
                     structuredFields = structuredFields + draft.fields
                     status = strings.generatedMfaSecret
-                }
             },
             onCancel = {
                 clearSecretEditor()
@@ -1375,68 +1739,84 @@ fun KeysteadClientApp(
             },
             onSave = {
                 val current = session ?: return@AddSecretPanel
-                runAction {
-                    val editing = editingSecretId
+                val editing = editingSecretId
+                val formType = secretType
+                val formTitle = title
+                val formUsername = username
+                val formPassword = passwordDraft.value
+                val formUrl = url
+                val formCategory = category
+                val formProvider = provider
+                val formSoftware = software
+                val formAccount = account
+                val formExpiry = expiry
+                val formFields = structuredFields
+                runAction(
+                    group = UiActionGroup.VAULT,
+                    isCurrent = { session === current },
+                    work = {
                     if (editing != null) {
-                        if (secretType == SecretType.LOGIN_PASSWORD) {
+                            if (formType == SecretType.LOGIN_PASSWORD) {
                             current.updateLogin(
                                 editing,
-                                title,
-                                username,
-                                passwordDraft.value,
-                                url.ifBlank { null },
-                                category = category.ifBlank { null },
-                                provider = provider.ifBlank { null },
-                                software = software.ifBlank { null },
-                                account = account.ifBlank { null },
-                                expiry = expiry.ifBlank { null },
+                                    formTitle,
+                                    formUsername,
+                                    formPassword,
+                                    formUrl.ifBlank { null },
+                                    category = formCategory.ifBlank { null },
+                                    provider = formProvider.ifBlank { null },
+                                    software = formSoftware.ifBlank { null },
+                                    account = formAccount.ifBlank { null },
+                                    expiry = formExpiry.ifBlank { null },
                             )
                         } else {
-                            val spec = SecretFormModel.specFor(secretType)
+                                val spec = SecretFormModel.specFor(formType)
                             current.updateStructuredSecret(
                                 editing,
-                                title = title,
-                                fields = SecretFormModel.fieldValues(spec, structuredFields),
-                                category = category.ifBlank { spec.defaultCategory },
-                                provider = provider.ifBlank { spec.defaultProvider },
-                                software = software.ifBlank { spec.defaultSoftware },
-                                account = account.ifBlank { null },
-                                expiry = expiry.ifBlank { null },
+                                    title = formTitle,
+                                    fields = SecretFormModel.fieldValues(spec, formFields),
+                                    category = formCategory.ifBlank { spec.defaultCategory },
+                                    provider = formProvider.ifBlank { spec.defaultProvider },
+                                    software = formSoftware.ifBlank { spec.defaultSoftware },
+                                    account = formAccount.ifBlank { null },
+                                    expiry = formExpiry.ifBlank { null },
                             )
                         }
-                        status = strings.updatedSecret
                     } else {
-                        if (secretType == SecretType.LOGIN_PASSWORD) {
+                            if (formType == SecretType.LOGIN_PASSWORD) {
                             current.addLogin(
-                                title,
-                                username,
-                                passwordDraft.value,
-                                url.ifBlank { null },
-                                category = category.ifBlank { null },
-                                provider = provider.ifBlank { null },
-                                software = software.ifBlank { null },
-                                account = account.ifBlank { null },
-                                expiry = expiry.ifBlank { null },
+                                    formTitle,
+                                    formUsername,
+                                    formPassword,
+                                    formUrl.ifBlank { null },
+                                    category = formCategory.ifBlank { null },
+                                    provider = formProvider.ifBlank { null },
+                                    software = formSoftware.ifBlank { null },
+                                    account = formAccount.ifBlank { null },
+                                    expiry = formExpiry.ifBlank { null },
                             )
                         } else {
-                            val spec = SecretFormModel.specFor(secretType)
+                                val spec = SecretFormModel.specFor(formType)
                             current.addStructuredSecret(
-                                type = secretType,
-                                title = title,
-                                fields = SecretFormModel.fieldValues(spec, structuredFields),
-                                category = category.ifBlank { spec.defaultCategory },
-                                provider = provider.ifBlank { spec.defaultProvider },
-                                software = software.ifBlank { spec.defaultSoftware },
-                                account = account.ifBlank { null },
-                                expiry = expiry.ifBlank { null },
+                                    type = formType,
+                                    title = formTitle,
+                                    fields = SecretFormModel.fieldValues(spec, formFields),
+                                    category = formCategory.ifBlank { spec.defaultCategory },
+                                    provider = formProvider.ifBlank { spec.defaultProvider },
+                                    software = formSoftware.ifBlank { spec.defaultSoftware },
+                                    account = formAccount.ifBlank { null },
+                                    expiry = formExpiry.ifBlank { null },
                             )
                         }
-                        status = strings.savedSecret
                     }
+                        readVaultUiSnapshot(current)
+                    },
+                ) { snapshot ->
+                    status = if (editing != null) strings.updatedSecret else strings.savedSecret
                     clearSecretEditor()
                     revealedFieldName = null
                     revealedValue = ""
-                    refresh(current)
+                    applyVaultUiSnapshot(snapshot)
                     currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
                 }
             },
@@ -1445,6 +1825,7 @@ fun KeysteadClientApp(
     }
     val accountPanel: @Composable () -> Unit = {
         AccountPanel(
+            busy = actionBusy(UiActionGroup.ACCOUNT),
             authenticated = serverAuthSession != null,
             serverAvailability = serverAvailability,
             onCheckServer = { serverCheckGeneration += 1 },
@@ -1493,40 +1874,44 @@ fun KeysteadClientApp(
             },
             onRefresh = {
                 val authenticated = serverAuthSession ?: return@AccountPanel
-                runAction(serverAction = true) {
-                    authenticated.refresh()
+                runAction(
+                    group = UiActionGroup.ACCOUNT,
+                    serverAction = true,
+                    isCurrent = { serverAuthSession === authenticated },
+                    work = { authenticated.refresh() },
+                ) {
                     status = strings.serverSessionRefreshed
                 }
             },
             onLogout = {
                 val authenticated = serverAuthSession ?: return@AccountPanel
-                try {
-                    runAction(serverAction = true) {
-                        authenticated.revoke()
-                        status = strings.signedOutOfServer
-                    }
-                } finally {
+                runAction(
+                    group = UiActionGroup.ACCOUNT,
+                    serverAction = true,
+                    onFinally = {
                     serverSessionStore()?.clear()
-                    serverAuthSession = null
+                        if (serverAuthSession === authenticated) serverAuthSession = null
                     clearVaultAccessState()
                     pendingApprovalRequest = null
                     accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
-                }
+                    },
+                    work = { authenticated.revoke() },
+                ) { status = strings.signedOutOfServer }
             },
             onLogoutAll = {
                 val authenticated = serverAuthSession ?: return@AccountPanel
-                try {
-                    runAction(serverAction = true) {
-                        authenticated.logoutAll()
-                        status = strings.signedOutEverywhere
-                    }
-                } finally {
+                runAction(
+                    group = UiActionGroup.ACCOUNT,
+                    serverAction = true,
+                    onFinally = {
                     serverSessionStore()?.clear()
-                    serverAuthSession = null
+                        if (serverAuthSession === authenticated) serverAuthSession = null
                     clearVaultAccessState()
                     pendingApprovalRequest = null
                     accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
-                }
+                    },
+                    work = { authenticated.logoutAll() },
+                ) { status = strings.signedOutEverywhere }
             },
             onCreateAccount = {
                 if (
@@ -1544,24 +1929,32 @@ fun KeysteadClientApp(
                 }
                 val registrationPassword = serverPassword.toCharArray()
                 val loginPassword = serverPassword.toCharArray()
+                val expectedUrl = serverUrl
+                val expectedUsername = serverUsername
+                val store = serverSessionStore()
                 accountAuthUiState = accountAuthUiState.onInputChanged()
-                try {
-                    runAction(
-                        onError = { message ->
-                            accountAuthUiState = accountAuthUiState.withFailure(message)
-                        },
-                        serverAction = true,
-                    ) {
-                        val authClient = KeysteadServerAuthClient(serverUrl)
-                        authClient.registerUser(serverUsername, registrationPassword)
-                        val store = serverSessionStore()
+                runAction(
+                    group = UiActionGroup.ACCOUNT,
+                    onError = { message ->
+                        accountAuthUiState = accountAuthUiState.withFailure(message)
+                    },
+                    serverAction = true,
+                    isCurrent = { serverUrl == expectedUrl && serverUsername == expectedUsername },
+                    onDiscard = ServerAuthSession::close,
+                    onFinally = {
+                        Wipe.wipe(registrationPassword)
+                        Wipe.wipe(loginPassword)
+                    },
+                    work = {
+                        val authClient = KeysteadServerAuthClient(expectedUrl)
+                        authClient.registerUser(expectedUsername, registrationPassword)
                         val tokenSink: ((String, java.time.Instant) -> Unit)? =
                             store?.let { s ->
                                 { refreshToken, expiresAt ->
                                     s.save(
                                         PersistedAuthSession(
-                                            serverUrl,
-                                            serverUsername,
+                                            expectedUrl,
+                                            expectedUsername,
                                             refreshToken,
                                             expiresAt,
                                         ),
@@ -1569,17 +1962,14 @@ fun KeysteadClientApp(
                                 }
                             }
                         val onRevoked: (() -> Unit)? = store?.let { s -> { s.clear() } }
-                        val authenticated =
-                            authClient.login(serverUsername, loginPassword, tokenSink, onRevoked)
+                        authClient.login(expectedUsername, loginPassword, tokenSink, onRevoked)
+                    },
+                ) { authenticated ->
                         serverAuthSession?.close()
                         serverAuthSession = authenticated
                         clearVaultAccessState()
                         accountAuthUiState = accountAuthUiState.select(AccountAuthMode.SIGN_IN)
                         status = strings.serverUserCreatedAndSignedIn
-                    }
-                } finally {
-                    Wipe.wipe(registrationPassword)
-                    Wipe.wipe(loginPassword)
                     serverPassword = ""
                     serverPasswordConfirmation = ""
                 }
@@ -1588,25 +1978,42 @@ fun KeysteadClientApp(
     }
     val syncPanel: @Composable () -> Unit = {
         SyncPanel(
+            busy = actionBusy(UiActionGroup.SYNC),
             vaultOpen = session != null,
             authenticated = serverAuthSession != null,
             serverAvailability = serverAvailability,
             onCheckServer = { serverCheckGeneration += 1 },
             onUploadSelected = { secretIds ->
                 val current = session ?: return@SyncPanel
-                runAction(serverAction = true) {
-                    conflictAssessment = null
+                val authenticated = serverAuthSession ?: return@SyncPanel
+                val client = authenticated.client()
+                runAction(
+                    group = UiActionGroup.SYNC,
+                    serverAction = true,
+                    isCurrent = { session === current && serverAuthSession === authenticated },
+                    work = {
+                    var latestInventory: RecordInventorySnapshot? = null
                     val pushed =
                         SelectedRecordUploadCoordinator.upload(
                             secretIds = secretIds,
-                            push = { current.pushSelectedPersonalRecordsTo(serverClient(), it) },
+                                push = { current.pushSelectedPersonalRecordsTo(client, it) },
                             refreshComparisons = {
-                                loadRecordInventory()
-                                recordInventory?.comparisons.orEmpty()
+                                    loadRecordInventory(current, client)
+                                        .also { latestInventory = it }
+                                        .inventory.comparisons.orEmpty()
                             },
                             promote = current::promoteLocalRecord,
                         )
-                    refresh(current)
+                        Triple(
+                            pushed,
+                            readVaultUiSnapshot(current),
+                            latestInventory ?: loadRecordInventory(current, client),
+                        )
+                    },
+                ) { (pushed, vaultSnapshot, inventorySnapshot) ->
+                    conflictAssessment = null
+                    applyVaultUiSnapshot(vaultSnapshot)
+                    applyRecordInventory(inventorySnapshot)
                     status = strings.uploadedSelectedRecords(pushed)
                 }
             },
@@ -1619,8 +2026,16 @@ fun KeysteadClientApp(
             },
             onPull = { prepareSyncComparison() },
             onRefreshRecords = {
-                runAction(serverAction = true) {
-                    loadRecordInventory()
+                val current = session
+                val authenticated = serverAuthSession ?: return@SyncPanel
+                val client = authenticated.client()
+                runAction(
+                    group = UiActionGroup.SYNC,
+                    serverAction = true,
+                    isCurrent = { session === current && serverAuthSession === authenticated },
+                    work = { loadRecordInventory(current, client) },
+                ) { snapshot ->
+                    applyRecordInventory(snapshot)
                     status = strings.refreshRecordInventory
                 }
             },
@@ -1636,6 +2051,7 @@ fun KeysteadClientApp(
     }
     val backupPanel: @Composable () -> Unit = {
         BackupPanel(
+            busy = actionBusy(UiActionGroup.BACKUP),
             vaultOpen = session != null,
             backupPassword = backupPassword,
             onBackupPasswordChange = { backupPassword = it },
@@ -1646,6 +2062,7 @@ fun KeysteadClientApp(
     }
     val portableBackupRestorePanel: @Composable () -> Unit = {
         PortableBackupRestorePanel(
+            busy = actionBusy(UiActionGroup.BACKUP),
             backupPassword = backupPassword,
             onBackupPasswordChange = { backupPassword = it },
             backupPasswordConfirmation = backupPasswordConfirmation,
@@ -1684,6 +2101,7 @@ fun KeysteadClientApp(
                 localLoginEnrolled = deviceLoginAvailable,
             )
         LocalLoginPanel(
+            busy = actionBusy(UiActionGroup.DEVICE_LOGIN),
             secureStorage = localUnlockStorageModel,
             presentation = localPresentation,
             credentialLoaded = localUnlockCredential != null,
@@ -1711,6 +2129,17 @@ fun KeysteadClientApp(
                 ),
             locale = locale,
             onLocaleChange = onLocaleChange,
+            autoLockTimeout = autoLockTimeout,
+            onAutoLockTimeoutChange = { timeout ->
+                autoLockTimeout = timeout
+                userIdleTracker.recordActivity()
+                autoLockSaveJob?.cancel()
+                autoLockSaveJob =
+                    uiScope.launch {
+                        delay(150)
+                        withContext(Dispatchers.IO) { autoLockSettings.save(timeout) }
+                    }
+            },
             settingsScope = settingsScope,
             onSettingsScopeChange = onSettingsScopeChange,
             configFilePath = effectiveConfigPath,
@@ -1724,6 +2153,7 @@ fun KeysteadClientApp(
     val listPanel: @Composable (Modifier) -> Unit = { modifier ->
         SecretListPanel(
             secrets = visibleSecrets,
+            breachFindings = savedPasswordBreachFindings,
             totalSecretCount = secrets.size,
             query = secretListQuery,
             onQueryTextChange = { filterText = it },
@@ -1774,19 +2204,26 @@ fun KeysteadClientApp(
             onReveal = { fieldName ->
                 val current = session ?: return@InspectorPanel
                 val selected = selectedSecret ?: return@InspectorPanel
-                runAction {
-                    clearSecretEditor()
-                    revealedValue =
+                clearSecretEditor()
+                runAction(
+                    group = UiActionGroup.VAULT,
+                    isCurrent = {
+                        session === current && selectedSecretId == selected.id
+                    },
+                    work = {
                         if (selected.type == SecretType.LOGIN_PASSWORD.name && fieldName == "password") {
                             current.revealPassword(selected.id)
                         } else {
                             current.revealField(selected.id, fieldName)
                         }
+                    },
+                ) { value ->
+                    revealedValue = value
                     revealedFieldName = fieldName
                     revealGeneration =
                         revealLifecycle.reveal(
                             "${selected.id}:$fieldName",
-                            revealedValue,
+                            value,
                             java.time.Instant.now(),
                         )
                     status = strings.secretRevealed
@@ -1839,17 +2276,23 @@ fun KeysteadClientApp(
             onEdit = {
                 val current = session ?: return@InspectorPanel
                 val selected = selectedSecret ?: return@InspectorPanel
-                runAction {
+                runAction(
+                    group = UiActionGroup.VAULT,
+                    isCurrent = {
+                        session === current && selectedSecretId == selected.id
+                    },
+                    work = { current.editSnapshot(selected.id) },
+                ) { snapshot ->
                     revealLifecycle.clear()
                     revealedFieldName = null
                     revealedValue = ""
-                    val snapshot = current.editSnapshot(selected.id)
                     val type = SecretType.valueOf(snapshot.type)
                     secretType = type
                     title = snapshot.title
                     username = snapshot.username
                     passwordDraft = PasswordDraftState(snapshot.password)
                     passwordBreachResult = PasswordBreachResult.NotChecked
+                    passwordCheckToken = null
                     url = snapshot.url
                     category = snapshot.category.orEmpty()
                     provider = snapshot.provider.orEmpty()
@@ -1860,6 +2303,9 @@ fun KeysteadClientApp(
                     editingSecretId = snapshot.id
                     status = strings.loadedSecretForEdit
                     currentDestination = top.focess.keystead.client.ui.KeysteadDestination.ADD
+                    if (type == SecretType.LOGIN_PASSWORD && snapshot.password.isNotEmpty()) {
+                        checkPasswordDraft()
+                    }
                 }
             },
             modifier = modifier,
@@ -1872,12 +2318,20 @@ fun KeysteadClientApp(
             serverAvailability.isOnline &&
             currentDestination == top.focess.keystead.client.ui.KeysteadDestination.SHARE
         ) {
-            runAction(serverAction = true) { outstandingShares = serverClient().listShares() }
+            val authenticated = serverAuthSession ?: return@LaunchedEffect
+            val client = authenticated.client()
+            runAction(
+                group = UiActionGroup.SHARE,
+                serverAction = true,
+                isCurrent = { serverAuthSession === authenticated },
+                work = { client.listShares() },
+            ) { outstandingShares = it }
         }
     }
 
     val sharePanel: @Composable () -> Unit = {
         SharePanel(
+            busy = actionBusy(UiActionGroup.SHARE),
             authenticated = serverAuthSession != null,
             serverAvailability = serverAvailability,
             onCheckServer = { serverCheckGeneration += 1 },
@@ -1899,26 +2353,36 @@ fun KeysteadClientApp(
             },
             onMint = {
                 val passphrase = sharePassphrase.toCharArray()
-                try {
-                    runAction(serverAction = true) {
+                val authenticated = serverAuthSession ?: return@SharePanel
+                val client = authenticated.client()
+                val expectedTitle = shareTitle
+                val expectedPayload = sharePayload
+                val expectedTtl = shareTtl
+                val expectedBurn = shareBurn
+                runAction(
+                    group = UiActionGroup.SHARE,
+                    serverAction = true,
+                    isCurrent = { serverAuthSession === authenticated },
+                    onFinally = { Wipe.wipe(passphrase) },
+                    work = {
                         val minted =
                             shareExchange.mint(
-                                serverClient(),
-                                shareTitle,
-                                sharePayload,
+                                    client,
+                                    expectedTitle,
+                                    expectedPayload,
                                 passphrase,
-                                shareTtl,
-                                shareBurn,
+                                    expectedTtl,
+                                    expectedBurn,
                             )
+                        minted to client.listShares()
+                    },
+                ) { (minted, shares) ->
                         mintedShare = minted
                         shareTitle = ""
                         sharePayload = ""
                         sharePassphrase = ""
-                        outstandingShares = serverClient().listShares()
+                        outstandingShares = shares
                         status = strings.shareMinted(minted.code)
-                    }
-                } finally {
-                    Wipe.wipe(passphrase)
                 }
             },
             redeemCode = redeemCode,
@@ -1930,33 +2394,49 @@ fun KeysteadClientApp(
             onRedeem = {
                 val passphrase = redeemPassphrase.toCharArray()
                 val code = redeemCode.trim()
-                try {
-                    runAction(serverAction = true) {
-                        val contents =
+                val expectedServerUrl = serverUrl
+                runAction(
+                    group = UiActionGroup.SHARE,
+                    serverAction = true,
+                    isCurrent = { serverUrl == expectedServerUrl },
+                    onFinally = { Wipe.wipe(passphrase) },
+                    work = {
                             shareExchange.redeem(
-                                KeysteadServerClient.forPublicRedeem(serverUrl),
+                                KeysteadServerClient.forPublicRedeem(expectedServerUrl),
                                 code,
                                 passphrase,
                             )
+                    },
+                ) { contents ->
                         redeemedContents = contents
                         redeemCode = ""
                         redeemPassphrase = ""
                         status = strings.shareRedeemed
-                    }
-                } finally {
-                    Wipe.wipe(passphrase)
                 }
             },
             outstandingShares = outstandingShares,
             onRefreshShares = {
-                runAction(serverAction = true) {
-                    outstandingShares = serverClient().listShares()
+                val authenticated = serverAuthSession ?: return@SharePanel
+                val client = authenticated.client()
+                runAction(
+                    group = UiActionGroup.SHARE,
+                    serverAction = true,
+                    isCurrent = { serverAuthSession === authenticated },
+                    work = { client.listShares() },
+                ) { shares ->
+                    outstandingShares = shares
                     status = strings.loadedShares(outstandingShares.size)
                 }
             },
             onDeleteShare = { code ->
-                runAction(serverAction = true) {
-                    serverClient().deleteShare(code)
+                val authenticated = serverAuthSession ?: return@SharePanel
+                val client = authenticated.client()
+                runAction(
+                    group = UiActionGroup.SHARE,
+                    serverAction = true,
+                    isCurrent = { serverAuthSession === authenticated },
+                    work = { client.deleteShare(code) },
+                ) {
                     outstandingShares = outstandingShares.filterNot { it.code == code }
                     status = strings.deletedShare(code)
                 }
@@ -1994,28 +2474,50 @@ fun KeysteadClientApp(
         )
     val vaultAccessApprovalContent: @Composable () -> Unit = {
         VaultAccessApprovalPanel(
+            busy = actionBusy(UiActionGroup.RECOVERY),
             authenticated = serverAuthSession != null,
             serverAvailability = serverAvailability,
             vaultOpen = session != null,
             pendingAccessRequest = pendingApprovalRequest,
             onCheckServer = { serverCheckGeneration += 1 },
             onFindPendingAccessRequest = find@{
-                runAction(serverAction = true) {
-                    pendingApprovalRequest =
-                        VaultAccessWorkflow(serverClient())
+                val authenticated = serverAuthSession ?: return@find
+                val client = authenticated.client()
+                val ownRequestId = vaultAccessExchangeSession?.requestId
+                runAction(
+                    group = UiActionGroup.RECOVERY,
+                    serverAction = true,
+                    isCurrent = { serverAuthSession === authenticated },
+                    work = {
+                        VaultAccessWorkflow(client)
                             .pending()
                             .firstOrNull {
-                                it.requestId != vaultAccessExchangeSession?.requestId
+                                    it.requestId != ownRequestId
                             }
                             ?: throw IllegalStateException(strings.noPendingVaultAccessRequest)
+                    },
+                ) { request ->
+                    pendingApprovalRequest = request
                     status = strings.pendingVaultAccessRequestLoaded
                 }
             },
             onApprovePendingAccessRequest = approve@{
                 val current = session ?: return@approve
                 val request = pendingApprovalRequest ?: return@approve
-                runAction(serverAction = true) {
-                    VaultAccessWorkflow(serverClient()).approve(request, current)
+                val authenticated = serverAuthSession ?: return@approve
+                val client = authenticated.client()
+                runAction(
+                    group = UiActionGroup.RECOVERY,
+                    serverAction = true,
+                    isCurrent = {
+                        session === current &&
+                            serverAuthSession === authenticated &&
+                            pendingApprovalRequest?.requestId == request.requestId
+                    },
+                    work = {
+                        VaultAccessWorkflow(client).approve(request, current)
+                    },
+                ) {
                     pendingApprovalRequest =
                         request.copy(
                             state = ServerVaultAccessRequestState.APPROVED,
@@ -2028,6 +2530,7 @@ fun KeysteadClientApp(
     }
     val serverRestoreContent: @Composable () -> Unit = {
         ServerRestorePanel(
+            busy = actionBusy(UiActionGroup.RECOVERY),
             model = serverVaultRestoreModel,
             serverAvailability = serverAvailability,
             onCheckServer = { serverCheckGeneration += 1 },
@@ -2050,19 +2553,35 @@ fun KeysteadClientApp(
                     top.focess.keystead.client.ui.KeysteadDestination.ACCOUNT
             },
             onCreateRequest = {
-                runAction(serverAction = true) {
-                    val authenticated = serverAuthSession
-                        ?: throw IllegalStateException(strings.notSignedIn)
-                    val error = beginVaultAccessExchange(authenticated)
-                    if (error != null) throw IllegalStateException(error)
+                val authenticated = serverAuthSession ?: return@ServerRestorePanel
+                val expectedServerUrl = serverUrl
+                runAction(
+                    group = UiActionGroup.RECOVERY,
+                    serverAction = true,
+                    isCurrent = {
+                        serverAuthSession === authenticated && serverUrl == expectedServerUrl
+                    },
+                    onDiscard = { (exchange, _) -> exchange.close() },
+                    work = { beginVaultAccessExchange(authenticated, expectedServerUrl) },
+                ) { (exchange, request) ->
+                    vaultAccessExchangeSession = exchange
+                    ownVaultAccessRequest = request
                     status = strings.vaultAccessRequestCreated
                 }
             },
             onRefreshRequest = {
                 val request = ownVaultAccessRequest ?: return@ServerRestorePanel
-                runAction(serverAction = true) {
-                    val refreshed =
-                        VaultAccessWorkflow(serverClient()).refresh(request.requestId)
+                val authenticated = serverAuthSession ?: return@ServerRestorePanel
+                val client = authenticated.client()
+                runAction(
+                    group = UiActionGroup.RECOVERY,
+                    serverAction = true,
+                    isCurrent = {
+                        serverAuthSession === authenticated &&
+                            ownVaultAccessRequest?.requestId == request.requestId
+                    },
+                    work = { VaultAccessWorkflow(client).refresh(request.requestId) },
+                ) { refreshed ->
                     vaultAccessLifecycle.updateRequest(refreshed)
                     ownVaultAccessRequest = refreshed
                     status = strings.vaultAccessRequestUpdated
@@ -2111,35 +2630,57 @@ fun KeysteadClientApp(
                     return@restore
                 }
                 unlockError = null
+                val authenticated = serverAuthSession ?: return@restore
+                val client = authenticated.client()
+                val stateStore = syncStateStore(target)
+                val newMasterPassphrase = serverRestoreNewMasterPassphrase.toCharArray()
                 runAction(
+                    group = UiActionGroup.RECOVERY,
                     onError = { unlockError = it },
                     serverAction = true,
-                ) {
+                    isCurrent = {
+                        serverAuthSession === authenticated &&
+                            ownVaultAccessRequest?.requestId == approvedRequest.requestId
+                    },
+                    onDiscard = { (_, opened) -> opened.session.close() },
+                    onFinally = { Wipe.wipe(newMasterPassphrase) },
+                    work = {
                     val result =
                         ServerVaultProvisioningService()
                             .restore(
                                 file = target,
                                 request = approvedRequest,
                                 exchangeSession = exchange,
-                                newMasterPassphrase =
-                                    serverRestoreNewMasterPassphrase.toCharArray(),
-                                client = serverClient(),
-                                stateStore = syncStateStore(target),
+                                    newMasterPassphrase = newMasterPassphrase,
+                                    client = client,
+                                    stateStore = stateStore,
                             )
+                        val opened =
+                            try {
+                                OpenedVaultResult(
+                                    session = result.session,
+                                    rememberedPath = vaultLocationSettings.rememberSuccessfulVault(target),
+                                    fingerprint = requireNotNull(approvedRequest.approvedPackage).fingerprint,
+                                    snapshot = readVaultUiSnapshot(result.session),
+                                )
+                            } catch (error: Exception) {
+                                result.session.close()
+                                throw error
+                            }
+                        result to opened
+                    },
+                ) { (result, opened) ->
                     session?.close()
-                    session = result.session
-                    vaultDirectory =
-                        vaultLocationSettings
-                            .rememberSuccessfulVault(target)
-                            .toString()
-                    fingerprint = requireNotNull(approvedRequest.approvedPackage).fingerprint
+                    session = opened.session
+                    vaultDirectory = opened.rememberedPath.toString()
+                    fingerprint = opened.fingerprint
                     clearVaultAccessState()
                     selectedSecretId = null
                     revealLifecycle.clear()
                     revealedFieldName = null
                     revealedValue = ""
                     clearSecretEditor()
-                    refresh(result.session)
+                    applyVaultUiSnapshot(opened.snapshot)
                     serverRestoreNewMasterPassphrase = ""
                     serverRestoreNewMasterPassphraseConfirmation = ""
                     currentDestination =
@@ -2234,6 +2775,7 @@ fun KeysteadClientApp(
             settingsContent = { settingsPanel() },
             unlockContent = {
                 top.focess.keystead.client.ui.UnlockScreen(
+                    busy = actionBusy(UiActionGroup.VAULT),
                     vaultDirectory = vaultDirectory,
                     masterPassword = masterPassword,
                     errorMessage = unlockError,
@@ -2254,26 +2796,45 @@ fun KeysteadClientApp(
                             return@open
                         }
                         unlockError = null
-                        runAction(onError = { unlockError = it }) {
+                        val requestedPath = Path.of(vaultDirectory)
+                        val password = masterPassword.toCharArray()
+                        runAction(
+                            group = UiActionGroup.VAULT,
+                            onError = { unlockError = it },
+                            isCurrent = { Path.of(vaultDirectory) == requestedPath },
+                            onDiscard = { it.session.close() },
+                            onFinally = { Wipe.wipe(password) },
+                            work = {
                             val opened =
                                 LocalVaultSession.openOrCreate(
-                                    Path.of(vaultDirectory),
-                                    masterPassword.toCharArray(),
+                                        requestedPath,
+                                        password,
                                 )
+                                try {
+                                    OpenedVaultResult(
+                                        session = opened,
+                                        rememberedPath =
+                                            vaultLocationSettings.rememberSuccessfulVault(requestedPath),
+                                        fingerprint = opened.fingerprintValue(),
+                                        snapshot = readVaultUiSnapshot(opened),
+                                    )
+                                } catch (error: Exception) {
+                                    opened.close()
+                                    throw error
+                                }
+                            },
+                        ) { opened ->
                             session?.close()
-                            session = opened
-                            vaultDirectory =
-                                vaultLocationSettings
-                                    .rememberSuccessfulVault(Path.of(vaultDirectory))
-                                    .toString()
-                            fingerprint = opened.fingerprintValue()
+                            session = opened.session
+                            vaultDirectory = opened.rememberedPath.toString()
+                            fingerprint = opened.fingerprint
                             masterPassword = ""
                             selectedSecretId = null
                             revealLifecycle.clear()
                             revealedFieldName = null
                             revealedValue = ""
                             clearSecretEditor()
-                            refresh(opened)
+                            applyVaultUiSnapshot(opened.snapshot)
                             if (localUnlockDescriptor?.persistence ==
                                     LocalLoginPersistence.BIOMETRIC
                             ) {
@@ -2295,21 +2856,37 @@ fun KeysteadClientApp(
                             return@UnlockScreen
                         }
                         unlockError = null
-                        runAction(onError = { unlockError = it }) {
-                            try {
+                        val requestedPath = Path.of(vaultDirectory)
+                        runAction(
+                            group = UiActionGroup.VAULT,
+                            onError = { unlockError = it },
+                            isCurrent = { Path.of(vaultDirectory) == requestedPath },
+                            onDiscard = { it.session.close() },
+                            work = {
                                 localUnlockCredentialManager.useExistingOnce { credential ->
-                                    localUnlockCredential = credential
                                     val opened = LocalVaultSession.openWithLocalLogin(
-                                        Path.of(vaultDirectory),
+                                        requestedPath,
                                         credential,
                                     )
+                                    try {
+                                        OpenedVaultResult(
+                                            session = opened,
+                                            rememberedPath =
+                                                vaultLocationSettings.rememberSuccessfulVault(requestedPath),
+                                            fingerprint = opened.fingerprintValue(),
+                                            snapshot = readVaultUiSnapshot(opened),
+                                        )
+                                    } catch (error: Exception) {
+                                        opened.close()
+                                        throw error
+                                    }
+                                }
+                            },
+                        ) { opened ->
                                     session?.close()
-                                    session = opened
-                                    vaultDirectory =
-                                        vaultLocationSettings
-                                            .rememberSuccessfulVault(Path.of(vaultDirectory))
-                                            .toString()
-                                    fingerprint = opened.fingerprintValue()
+                                    session = opened.session
+                                    vaultDirectory = opened.rememberedPath.toString()
+                                    fingerprint = opened.fingerprint
                                     masterPassword = ""
                                     selectedSecretId = null
                                     revealLifecycle.clear()
@@ -2317,11 +2894,7 @@ fun KeysteadClientApp(
                                     revealedValue = ""
                                     clearSecretEditor()
                                     status = strings.vaultOpen
-                                    refresh(opened)
-                                }
-                            } finally {
-                                localUnlockCredential = null
-                            }
+                                    applyVaultUiSnapshot(opened.snapshot)
                         }
                     },
                 )

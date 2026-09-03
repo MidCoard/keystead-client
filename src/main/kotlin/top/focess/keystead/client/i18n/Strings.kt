@@ -25,8 +25,8 @@ import top.focess.keystead.client.ui.KeysteadZone
  * secret grouper, expiry labels) take a `Strings` argument for the same reason; their no-argument
  * overloads delegate to [EnStrings] so existing unit tests keep asserting the canonical English.
  *
- * Add a member here and the compiler forces every [AppLocale] to provide it - there is no
- * "forgotten translation" failure mode.
+ * Values are loaded from locale-qualified Compose resources. Resource completeness tests keep the
+ * English and Chinese key sets aligned while this interface keeps application call sites type-safe.
  */
 internal interface Strings {
     val appTitle: String
@@ -56,6 +56,10 @@ internal interface Strings {
     val quit: String
     val vaultLocked: String
     val vaultOpen: String
+    val vaultAutoLocked: String
+    val groupAutoLock: String
+    val autoLockHelp: String
+    fun autoLockMinutes(minutes: Int): String
 
     val vaultLockedHeading: String
     val masterPassword: String
@@ -107,12 +111,24 @@ internal interface Strings {
     fun passwordFoundInBreaches(count: Int): String
     val passwordBreachCheckUnavailable: String
     val passwordBreachPrivacy: String
+    fun passwordBreachAuditFound(count: Int): String
+    fun passwordLeakBadge(count: Int): String
     val fieldCategory: String
     val fieldProvider: String
     val fieldSoftware: String
     val fieldAccount: String
     val fieldExpiry: String
     val generate: String
+    val passwordGeneratorTitle: String
+    fun passwordGeneratorLength(length: Int): String
+    val passwordGeneratorUppercase: String
+    val passwordGeneratorLowercase: String
+    val passwordGeneratorDigits: String
+    val passwordGeneratorSymbols: String
+    val passwordGeneratorSelectSymbols: String
+    val passwordGeneratorAvoidAmbiguous: String
+    val passwordGeneratorInvalidSelection: String
+    val passwordGeneratorReplaceNotice: String
     val generateApiToken: String
     val generateSshKey: String
     val generateGpgKey: String
@@ -339,6 +355,7 @@ internal interface Strings {
     val serverEnvelopeCiphertextHash: String
     val hashVerified: String
     val hashInvalid: String
+    fun legacyRemoteHistory(events: Int): String
     fun remoteRecordSummary(events: Int, current: Int): String
     fun recordComparisonStatus(status: RecordComparisonStatus): String
     fun recordRevisions(local: Long?, server: Long?): String

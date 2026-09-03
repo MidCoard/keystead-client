@@ -9,6 +9,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.time.Duration
 import java.util.Base64
 
 internal fun interface ServerAuthorization {
@@ -133,7 +134,9 @@ class KeysteadServerClient private constructor(
         body: String?,
         authorizationHeader: String?,
     ): ServerExchange {
-        val builder = HttpRequest.newBuilder(endpoint(*segments.toTypedArray(), query = query))
+        val builder =
+            HttpRequest.newBuilder(endpoint(*segments.toTypedArray(), query = query))
+                .timeout(Duration.ofSeconds(30))
         authorizationHeader?.let { builder.header("Authorization", it) }
         if (body != null) builder.header("Content-Type", "application/json")
         val publisher =

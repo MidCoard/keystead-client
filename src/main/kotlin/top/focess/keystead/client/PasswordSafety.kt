@@ -39,23 +39,48 @@ object PasswordStrengthEvaluator {
     }
 }
 
+fun interface PasswordBreachLookup {
+    fun prepare(password: CharArray): PasswordBreachQuery
+}
+
+interface PasswordBreachQuery : AutoCloseable {
+    fun breachCount(): Int
+}
+
 class PwnedPasswordChecker(
     private val rangeEndpoint: URI = URI("https://api.pwnedpasswords.com/range/"),
     private val http: HttpClient =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build(),
-) {
-    /** Returns the breach corpus occurrence count without transmitting the password or full hash. */
-    fun breachCount(password: CharArray): Int {
+) : PasswordBreachLookup {
+    /** Hashes the password locally and retains only the range prefix and wipeable hash suffix. */
+    override fun prepare(password: CharArray): PasswordBreachQuery {
         require(password.isNotEmpty()) { "Password cannot be empty" }
         var utf8 = ByteArray(0)
         var digest = ByteArray(0)
+        var hash = CharArray(0)
         try {
             val encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(password))
             utf8 = ByteArray(encoded.remaining()).also(encoded::get)
             digest = MessageDigest.getInstance("SHA-1").digest(utf8)
-            val hash = digest.joinToString("") { "%02X".format(it) }
-            val prefix = hash.take(PREFIX_LENGTH)
-            val suffix = hash.drop(PREFIX_LENGTH)
+            hash = digest.toUpperHexChars()
+            val prefix = String(hash, 0, PREFIX_LENGTH)
+            val suffix = hash.copyOfRange(PREFIX_LENGTH, hash.size)
+            return RangeQuery(prefix, suffix)
+        } finally {
+            Wipe.wipe(utf8)
+            Wipe.wipe(digest)
+            Wipe.wipe(hash)
+        }
+    }
+
+    private inner class RangeQuery(
+        private val prefix: String,
+        private val suffix: CharArray,
+    ) : PasswordBreachQuery {
+        private var closed = false
+
+        override fun breachCount(): Int {
+            check(!closed) { "Password breach query is closed" }
             val request =
                 HttpRequest.newBuilder(rangeEndpoint.resolve(prefix))
                     .timeout(Duration.ofSeconds(8))
@@ -76,20 +101,88 @@ class PwnedPasswordChecker(
                 .mapNotNull { line ->
                     val separator = line.indexOf(':')
                     if (separator <= 0) return@mapNotNull null
-                    val candidate = line.substring(0, separator)
-                    if (!candidate.equals(suffix, ignoreCase = true)) return@mapNotNull null
+                    if (!line.matchesHashSuffix(separator, suffix)) return@mapNotNull null
                     line.substring(separator + 1).toIntOrNull()
                 }
                 .firstOrNull()
                 ?: 0
-        } finally {
-            Wipe.wipe(utf8)
-            Wipe.wipe(digest)
         }
+
+        override fun close() {
+            if (!closed) {
+                closed = true
+                Wipe.wipe(suffix)
+            }
+        }
+    }
+
+    private fun ByteArray.toUpperHexChars(): CharArray {
+        val output = CharArray(size * 2)
+        forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            output[index * 2] = HEX[value ushr 4]
+            output[index * 2 + 1] = HEX[value and 0x0f]
+        }
+        return output
+    }
+
+    private fun String.matchesHashSuffix(separator: Int, suffix: CharArray): Boolean {
+        if (separator != suffix.size) return false
+        for (index in suffix.indices) {
+            if (this[index].uppercaseChar() != suffix[index]) return false
+        }
+        return true
     }
 
     private companion object {
         const val PREFIX_LENGTH = 5
         const val USER_AGENT = "Keystead/Desktop"
+        val HEX = "0123456789ABCDEF".toCharArray()
+    }
+}
+
+internal data class PasswordBreachAuditResult(
+    val findings: Map<String, Int>,
+    val checkedSecretIds: Set<String>,
+    val checked: Int,
+    val failed: Int,
+)
+
+internal class PasswordBreachAuditor(
+    private val lookup: PasswordBreachLookup,
+) {
+    fun audit(
+        session: LocalVaultSession,
+        secrets: List<SecretListItem>,
+    ): PasswordBreachAuditResult {
+        val findings = linkedMapOf<String, Int>()
+        val checkedSecretIds = linkedSetOf<String>()
+        var checked = 0
+        var failed = 0
+        secrets
+            .filter { it.type == top.focess.keystead.model.SecretType.LOGIN_PASSWORD.name }
+            .forEach { secret ->
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                try {
+                    var query: PasswordBreachQuery? = null
+                    session.withPassword(secret.id) { password ->
+                        if (password.isNotEmpty()) {
+                            query = lookup.prepare(password)
+                        }
+                    }
+                    query?.use {
+                        val count = it.breachCount()
+                        checkedSecretIds += secret.id
+                        checked += 1
+                        if (count > 0) findings[secret.id] = count
+                    }
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw error
+                } catch (_: Exception) {
+                    failed += 1
+                }
+            }
+        return PasswordBreachAuditResult(findings, checkedSecretIds, checked, failed)
     }
 }

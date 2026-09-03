@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.SecretFormModel
 import top.focess.keystead.client.LoginUsernameSuggestions
 import top.focess.keystead.client.PasswordBreachResult
+import top.focess.keystead.client.PasswordGeneratorOptions
 import top.focess.keystead.client.PasswordStrength
 import top.focess.keystead.client.i18n.LocalStrings
 import top.focess.keystead.model.SecretType
@@ -48,7 +50,7 @@ internal object UsernameSuggestionMenuPresentation {
 }
 
 @Composable
-fun AddSecretPanel(
+internal fun AddSecretPanel(
     enabled: Boolean,
     selectedType: SecretType,
     onSelectedTypeChange: (SecretType) -> Unit,
@@ -64,7 +66,8 @@ fun AddSecretPanel(
     passwordStrength: PasswordStrength,
     passwordBreachResult: PasswordBreachResult,
     onCheckPassword: () -> Unit,
-    onGeneratePassword: () -> Unit,
+    onPasswordEditingFinished: () -> Unit,
+    onGeneratePassword: (PasswordGeneratorOptions) -> Unit,
     url: String,
     onUrlChange: (String) -> Unit,
     category: String,
@@ -89,6 +92,7 @@ fun AddSecretPanel(
     editing: Boolean,
 ) {
     val strings = LocalStrings.current
+    var showPasswordGenerator by remember { mutableStateOf(false) }
     val spec = SecretFormModel.specForOrNull(selectedType)
     val categoryValue = category.ifBlank { spec?.defaultCategory.orEmpty() }
     val providerValue = provider.ifBlank { spec?.defaultProvider.orEmpty() }
@@ -151,7 +155,8 @@ fun AddSecretPanel(
                 passwordStrength = passwordStrength,
                 passwordBreachResult = passwordBreachResult,
                 onCheckPassword = onCheckPassword,
-                onGeneratePassword = onGeneratePassword,
+                onPasswordEditingFinished = onPasswordEditingFinished,
+                onGeneratePassword = { showPasswordGenerator = true },
             )
         } else if (spec != null) {
             if (selectedType == SecretType.API_TOKEN) {
@@ -253,8 +258,19 @@ fun AddSecretPanel(
                     }
                 )
             }
-            OutlinedButton(onClick = onCancel, enabled = enabled, modifier = Modifier.weight(1f)) { Text(strings.cancelClear) }
+            OutlinedButton(onClick = onCancel, enabled = enabled, modifier = Modifier.weight(1f)) {
+                Text(if (editing) strings.cancel else strings.cancelClear)
+            }
         }
+    }
+    if (showPasswordGenerator) {
+        PasswordGeneratorDialog(
+            onDismiss = { showPasswordGenerator = false },
+            onGenerate = { options ->
+                showPasswordGenerator = false
+                onGeneratePassword(options)
+            },
+        )
     }
 }
 
@@ -304,11 +320,13 @@ private fun LoginSecretFields(
     passwordStrength: PasswordStrength,
     passwordBreachResult: PasswordBreachResult,
     onCheckPassword: () -> Unit,
+    onPasswordEditingFinished: () -> Unit,
     onGeneratePassword: () -> Unit,
 ) {
     val strings = LocalStrings.current
     var suggestionsExpanded by remember { mutableStateOf(false) }
     var usernameFieldWidthPixels by remember { mutableIntStateOf(0) }
+    var passwordFieldWasFocused by remember { mutableStateOf(false) }
     val density = LocalDensity.current.density
     val matchingUsernames =
         remember(usernameSuggestions, username) {
@@ -372,10 +390,25 @@ private fun LoginSecretFields(
                 )
             },
             singleLine = true,
-            modifier = Modifier.weight(1f),
+            modifier =
+                Modifier.weight(1f).onFocusChanged { focusState ->
+                    if (passwordFieldWasFocused && !focusState.isFocused) {
+                        onPasswordEditingFinished()
+                    }
+                    passwordFieldWasFocused = focusState.isFocused
+                },
         )
-        OutlinedButton(onClick = onGeneratePassword, enabled = enabled, modifier = Modifier.width(128.dp)) {
-            Text(strings.generate)
+        Box(
+            modifier = Modifier.width(128.dp).height(56.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            OutlinedButton(
+                onClick = onGeneratePassword,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(strings.generate)
+            }
         }
     }
     Text(

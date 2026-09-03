@@ -37,8 +37,11 @@ class SecretListFilterTest {
         )
 
     @Test
-    fun emptyQueryReturnsAllSecrets() {
-        assertEquals(secrets, SecretListFilter.apply(secrets, SecretListQuery()))
+    fun emptyQuerySortsSecretsByTitleIgnoringCase() {
+        assertEquals(
+            listOf("github-login", "wechat-login", "ssh-key"),
+            SecretListFilter.apply(secrets, SecretListQuery()).map { it.id },
+        )
     }
 
     @Test

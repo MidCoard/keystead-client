@@ -32,6 +32,7 @@ import top.focess.keystead.model.SecretType
 
 @Composable
 internal fun SyncPanel(
+    busy: Boolean = false,
     vaultOpen: Boolean,
     authenticated: Boolean,
     serverAvailability: ServerAvailability,
@@ -52,6 +53,7 @@ internal fun SyncPanel(
 
     DestinationCard {
         SectionHeader(strings.serverSync)
+        ActionProgress(busy)
         ConnectedAvailabilityNotice(serverAvailability, onCheckServer)
         if (!authenticated) {
             Text(
@@ -65,7 +67,7 @@ internal fun SyncPanel(
         val vaultMismatch = recordInventory?.vaultMismatch == true
         Button(
             onClick = onPull,
-            enabled = vaultOpen && serverReady && !vaultMismatch,
+            enabled = vaultOpen && serverReady && !vaultMismatch && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(strings.pull)
@@ -102,7 +104,7 @@ internal fun SyncPanel(
                         if (assessment.canAutoRecover) {
                             Button(
                                 onClick = onPullAndRetry,
-                                enabled = serverAvailable,
+                                enabled = serverAvailable && !busy,
                                 modifier = Modifier.weight(1f),
                             ) {
                                 Text(strings.pullAndRetry)
@@ -110,7 +112,7 @@ internal fun SyncPanel(
                         } else {
                             Button(
                                 onClick = onPull,
-                                enabled = serverAvailable,
+                                enabled = serverAvailable && !busy,
                                 modifier = Modifier.weight(1f),
                             ) {
                                 Text(strings.pullLatest)
@@ -131,7 +133,7 @@ internal fun SyncPanel(
         CapabilityGroupLabel(strings.recordInventory, strings.loginRequired, serverReady)
         OutlinedButton(
             onClick = onRefreshRecords,
-            enabled = serverReady,
+            enabled = serverReady && !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(strings.refreshRecordInventory)
@@ -139,8 +141,8 @@ internal fun SyncPanel(
         recordInventory?.let { inventory ->
             RecordInventory(
                 inventory = inventory,
-                actionsEnabled = vaultOpen && serverReady,
-                serverActionsEnabled = serverReady,
+                actionsEnabled = vaultOpen && serverReady && !busy,
+                serverActionsEnabled = serverReady && !busy,
                 localRecordTitles = localRecordTitles,
                 onUploadSelected = onUploadSelected,
                 onRequestRemoveSelected = onRequestRemoveSelected,
@@ -190,6 +192,13 @@ private fun RecordInventory(
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (inventory.legacyRemoteRecords > 0) {
+                    Text(
+                        strings.legacyRemoteHistory(inventory.legacyRemoteRecords),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
@@ -254,6 +263,7 @@ private fun UnifiedRecordRow(
             RecordComparisonStatus.SERVER_ONLY,
             RecordComparisonStatus.LOCAL_NEWER,
             RecordComparisonStatus.SERVER_NEWER,
+            RecordComparisonStatus.LEGACY_UNVERIFIABLE,
             -> MaterialTheme.colorScheme.tertiary
             RecordComparisonStatus.HASH_MISMATCH -> MaterialTheme.colorScheme.error
         }
