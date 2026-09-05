@@ -7,6 +7,23 @@ import kotlin.test.assertEquals
 
 class SyncStateStoreTest {
     @Test
+    fun separatesLocalInstancesAccountsAndServers() {
+        val root = java.nio.file.Files.createTempDirectory("sync-scope")
+        try {
+            val file = root.resolve("source.kvault")
+            val a = SyncStateStore.forVault(file, "https://one.example", "alice")
+            a.recordPushed("fingerprint", 8)
+            a.recordPulledServerSequence("fingerprint", 11)
+            assertEquals(11L, SyncStateStore.forVault(file, "https://one.example/", "alice").lastPulledServerSequence("fingerprint"))
+            assertEquals(0L, SyncStateStore.forVault(file, "https://two.example", "alice").lastPulledServerSequence("fingerprint"))
+            assertEquals(0L, SyncStateStore.forVault(file, "https://one.example", "bob").lastPushedRevision("fingerprint"))
+            assertEquals(0L, SyncStateStore.forVault(root.resolve("copy.kvault"), "https://one.example", "alice").lastPulledServerSequence("fingerprint"))
+            SyncStateStore.startNewLocalInstance(file)
+            assertEquals(0L, SyncStateStore.forVault(file, "https://one.example", "alice").lastPulledServerSequence("fingerprint"))
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test
     fun remembersLocalPushRevisionAndServerPullSequencePerVault() {
         val directory = createTempDirectory("keystead-sync-state-test")
         val store = SyncStateStore(directory)

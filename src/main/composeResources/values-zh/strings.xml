@@ -513,4 +513,5 @@
     <string name="verify_local_login__windows_hello">使用 Windows Hello 验证</string>
     <string name="waiting_for_approval">正在等待另一台设备批准此请求。</string>
     <string name="works_offline">可离线使用</string>
+    <string name="record_comparison_status__unverified">尚未验证真实性</string>
 </resources>

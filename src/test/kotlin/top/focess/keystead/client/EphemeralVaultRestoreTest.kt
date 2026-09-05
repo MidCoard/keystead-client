@@ -51,6 +51,8 @@ class EphemeralVaultRestoreTest {
                                 ),
                             approvedAt = Instant.now(),
                         )
+                    val staleState = SyncStateStore(root.resolve("target-sync"))
+                    staleState.recordPulledServerSequence(source.fingerprintValue(), 999)
                     val restored =
                         ServerVaultProvisioningService().restore(
                             file = targetFile,
@@ -58,7 +60,7 @@ class EphemeralVaultRestoreTest {
                             exchangeSession = exchange,
                             newMasterPassphrase = "target-master".toCharArray(),
                             client = client,
-                            stateStore = SyncStateStore(root.resolve("target-sync")),
+                            stateStore = staleState,
                         )
                     restored.session.use { target ->
                         assertEquals(source.fingerprintValue(), target.fingerprintValue())
@@ -126,8 +128,11 @@ class EphemeralVaultRestoreTest {
                         ""
                     }
                     exchange.requestMethod == "GET" && path == "/api/v1/vault/records" -> {
-                        val records = events.mapIndexed { index, event -> recordResponse(index + 1L, event) }
-                        "{\"afterSequence\":0,\"records\":[${records.joinToString(",")}],\"highestSequence\":${records.size},\"hasMore\":false,\"nextSequence\":null}"
+                        val after = exchange.requestURI.query.split("&").first { it.startsWith("afterSequence=") }.substringAfter("=").toLong()
+                        val records = events.mapIndexedNotNull { index, event ->
+                            if (index + 1L > after) recordResponse(index + 1L, event) else null
+                        }
+                        "{\"afterSequence\":$after,\"records\":[${records.joinToString(",")}],\"highestSequence\":${events.size},\"hasMore\":false,\"nextSequence\":null}"
                     }
                     else -> error("Unexpected request ${exchange.requestMethod} $path")
                 }

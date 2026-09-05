@@ -23,7 +23,7 @@ class PersonalVaultRecordInventoryTest {
                 "content-key",
             )
 
-        val inventory = PersonalVaultRecordInventory.compare(listOf(record), listOf(remote(11, record)))
+        val inventory = verifiedInventory(listOf(record), listOf(remote(11, record)))
         val comparison = inventory.comparisons.orEmpty().single()
         val history = inventory.remoteHistory.single()
 
@@ -48,7 +48,7 @@ class PersonalVaultRecordInventoryTest {
         val remote = remote(12, encrypted("deletion-conflict", 2, "payload").withDeleted(true))
 
         val comparison =
-            PersonalVaultRecordInventory.compare(listOf(local), listOf(remote))
+            verifiedInventory(listOf(local), listOf(remote))
                 .comparisons.orEmpty().single()
 
         assertFalse(comparison.localDeleted ?: true)
@@ -74,7 +74,7 @@ class PersonalVaultRecordInventoryTest {
                 remote(5, encrypted("server-newer", 2, "new-server")),
             )
 
-        val inventory = PersonalVaultRecordInventory.compare(local, remote)
+        val inventory = verifiedInventory(local, remote)
 
         assertFalse(inventory.vaultMismatch)
         assertEquals(5, inventory.comparisons?.size)
@@ -104,7 +104,7 @@ class PersonalVaultRecordInventoryTest {
             )
 
         val comparison =
-            PersonalVaultRecordInventory.compare(listOf(local), listOf(remote(9, pushed)))
+            verifiedInventory(listOf(local), listOf(remote(9, pushed)))
                 .comparisons.orEmpty().single()
 
         assertEquals(RecordComparisonStatus.MATCHED, comparison.status)
@@ -118,7 +118,7 @@ class PersonalVaultRecordInventoryTest {
             remote(7, encrypted("content-conflict", 4, "remote", contentKey = "remote-content"))
         val invalidHistoryRecord = remote(8, encrypted("invalid-hash", 1, "payload")).copy(eventId = "bogus")
 
-        val inventory = PersonalVaultRecordInventory.compare(local, listOf(remoteRecord, invalidHistoryRecord))
+        val inventory = verifiedInventory(local, listOf(remoteRecord, invalidHistoryRecord))
 
         assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.statusOf("content-conflict"))
         assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.statusOf("invalid-hash"))
@@ -141,7 +141,7 @@ class PersonalVaultRecordInventoryTest {
             )
         val current = remote(2, record)
 
-        val inventory = PersonalVaultRecordInventory.compare(listOf(record), listOf(legacy, current))
+        val inventory = verifiedInventory(listOf(record), listOf(legacy, current))
 
         assertEquals(RecordComparisonStatus.MATCHED, inventory.statusOf("upgraded"))
         assertEquals(0, inventory.invalidRemoteRecords)
@@ -165,7 +165,7 @@ class PersonalVaultRecordInventoryTest {
                 contentKey = "",
             )
 
-        val inventory = PersonalVaultRecordInventory.compare(listOf(record), listOf(legacy))
+        val inventory = verifiedInventory(listOf(record), listOf(legacy))
         val comparison = inventory.comparisons.orEmpty().single()
 
         assertEquals(RecordComparisonStatus.LEGACY_UNVERIFIABLE, comparison.status)
@@ -179,7 +179,7 @@ class PersonalVaultRecordInventoryTest {
         val local = listOf(encrypted("local", 1, "payload", fingerprint = "local-vault"))
         val remote = listOf(remote(1, encrypted("server", 1, "payload", fingerprint = "server-vault")))
 
-        val inventory = PersonalVaultRecordInventory.compare(local, remote)
+        val inventory = verifiedInventory(local, remote)
 
         assertTrue(inventory.vaultMismatch)
         assertEquals("local-vault", inventory.localFingerprint)
@@ -211,6 +211,9 @@ class PersonalVaultRecordInventoryTest {
             false,
             contentKey,
         )
+
+    private fun verifiedInventory(local: List<EncryptedSyncRecord>?, remote: List<PersonalVaultRecord>) =
+        PersonalVaultRecordInventory.compare(local, remote, authenticate = { true })
 
     private fun remote(sequence: Long, record: EncryptedSyncRecord) =
         PersonalVaultRecord(

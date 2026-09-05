@@ -9,6 +9,42 @@ import java.util.Properties
 class SyncStateStore(private val directory: Path) {
     private val stateFile = directory.resolve("sync-state.properties")
 
+    /** A new local snapshot must never inherit the previous snapshot's watermarks. */
+    fun reset(fingerprint: String) {
+        val properties = load()
+        properties.remove(key(fingerprint, "pushed"))
+        properties.remove(serverSequenceKey(fingerprint))
+        persist(properties)
+    }
+
+    companion object {
+        private fun instanceFile(vaultFile: Path): Path {
+            val canonical = vaultFile.toAbsolutePath().normalize()
+            return canonical.parent.resolve("sync").resolve(RecordDisplayHash.of(canonical.toString()) + ".instance")
+        }
+
+        @Synchronized
+        fun startNewLocalInstance(vaultFile: Path) {
+            val marker = instanceFile(vaultFile)
+            Files.createDirectories(marker.parent)
+            val temporary = Files.createTempFile(marker.parent, "instance-", ".tmp")
+            try {
+                Files.writeString(temporary, java.util.UUID.randomUUID().toString())
+                Files.move(temporary, marker, ATOMIC_MOVE, REPLACE_EXISTING)
+            } finally { Files.deleteIfExists(temporary) }
+        }
+
+        @Synchronized
+        fun forVault(vaultFile: Path, serverOrigin: String, account: String): SyncStateStore {
+            val marker = instanceFile(vaultFile)
+            if (!Files.exists(marker)) startNewLocalInstance(vaultFile)
+            val instance = Files.readString(marker)
+            val scope = listOf(instance, serverOrigin.trim().trimEnd('/'), account)
+                .joinToString("") { "${it.length}:$it" }
+            return SyncStateStore(marker.parent.resolve(RecordDisplayHash.of(scope)))
+        }
+    }
+
     fun lastPushedRevision(fingerprint: String): Long = revision(fingerprint, "pushed")
 
     fun lastPulledServerSequence(fingerprint: String): Long =
@@ -44,11 +80,11 @@ class SyncStateStore(private val directory: Path) {
 
     private fun persist(properties: Properties) {
         Files.createDirectories(directory)
-        val temporary = stateFile.resolveSibling(".${stateFile.fileName}.tmp")
-        Files.newOutputStream(temporary).use { output ->
-            properties.store(output, "Keystead sync state")
-        }
-        Files.move(temporary, stateFile, ATOMIC_MOVE, REPLACE_EXISTING)
+        val temporary = Files.createTempFile(directory, "sync-state-", ".tmp")
+        try {
+            Files.newOutputStream(temporary).use { output -> properties.store(output, "Keystead sync state") }
+            Files.move(temporary, stateFile, ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally { Files.deleteIfExists(temporary) }
     }
 
     private fun load(): Properties {

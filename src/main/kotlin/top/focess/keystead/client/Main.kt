@@ -293,6 +293,7 @@ fun KeysteadClientApp(
     }
     val actionGate = remember { UiActionGate<UiActionGroup>() }
     var activeActionGroups by remember { mutableStateOf(emptySet<UiActionGroup>()) }
+    var vaultLockState by remember { mutableStateOf(VaultLockState()) }
     val vaultActionGroups =
         remember {
             setOf(
@@ -772,11 +773,19 @@ fun KeysteadClientApp(
         }
     }
 
-    fun lockVault(nextStatus: String = strings.vaultLocked) {
-        if (activeActionGroups.any(vaultActionGroups::contains)) return
+    fun finishPendingLock() {
+        if (!vaultLockState.shouldClose(activeActionGroups.any(vaultActionGroups::contains))) return
         session?.close()
         session = null
         localUnlockCredentialManager.unload()
+        vaultLockState = vaultLockState.completed()
+    }
+
+    fun lockVault(nextStatus: String = strings.vaultLocked) {
+        vaultLockState = vaultLockState.request()
+        showTotpCode = false
+        totpCode = ""
+        totpSecondsRemaining = 0
         localUnlockCredential = null
         secrets = emptyList()
         selectedSecretId = null
@@ -803,6 +812,8 @@ fun KeysteadClientApp(
         backupPasswordConfirmation = ""
         backupNewMasterPassphrase = ""
         backupNewMasterPassphraseConfirmation = ""
+        serverRestoreNewMasterPassphrase = ""
+        serverRestoreNewMasterPassphraseConfirmation = ""
         backupRestoreSelection = BackupRestoreSelection(source = null, target = null)
         pendingBackupRestore = null
         currentDestination = top.focess.keystead.client.ui.KeysteadDestination.SECRETS
@@ -813,6 +824,7 @@ fun KeysteadClientApp(
         pendingSyncComparison = null
         syncAccept.clear()
         unlockError = null
+        finishPendingLock()
     }
 
     LaunchedEffect(session, autoLockTimeout) {
@@ -848,6 +860,9 @@ fun KeysteadClientApp(
         work: () -> T,
         onSuccess: (T) -> Unit,
     ) {
+        if (vaultLockState.pending) return
+        val operationGeneration = vaultLockState.generation
+        fun resultIsCurrent() = vaultLockState.accepts(operationGeneration) && isCurrent()
         val conflicts =
             buildSet {
                 add(group)
@@ -859,7 +874,7 @@ fun KeysteadClientApp(
         uiScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) { work() }
-                if (isCurrent()) {
+                if (resultIsCurrent()) {
                     onSuccess(result)
                     if (serverAction) {
                         serverAvailability =
@@ -874,7 +889,7 @@ fun KeysteadClientApp(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: KeysteadRevisionConflictException) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 if (serverAction) {
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
@@ -882,7 +897,7 @@ fun KeysteadClientApp(
                 conflictAssessment = ConflictAssessment.from(error, strings)
                 actionFeedbackState.error(SyncStatusFormatter.messageFor(error, strings))
             } catch (error: KeysteadAccountConflictException) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 if (serverAction) {
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
@@ -891,7 +906,7 @@ fun KeysteadClientApp(
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } catch (error: KeysteadAuthenticationException) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 if (serverAction) {
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
@@ -902,7 +917,7 @@ fun KeysteadClientApp(
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } catch (error: java.io.IOException) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 if (serverAction) {
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
@@ -911,7 +926,7 @@ fun KeysteadClientApp(
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } catch (error: PersonalVaultMismatchException) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 if (serverAction) {
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
@@ -933,16 +948,17 @@ fun KeysteadClientApp(
                                     localRecords = current?.currentPersonalRecords(),
                                     remoteRecords = remote,
                                     localFingerprint = current?.fingerprintValue(),
+                                    authenticate = current?.let { it::authenticateSyncRecord },
                                 ),
                             )
                         }
                     }.getOrNull()
-                if (snapshot != null && serverAuthSession === authenticated && session === current) {
+                if (snapshot != null && resultIsCurrent() && serverAuthSession === authenticated && session === current) {
                     serverRecords = snapshot.serverRecords
                     recordInventory = snapshot.inventory
                 }
             } catch (error: KeysteadServerException) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 if (serverAction) {
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
@@ -951,7 +967,7 @@ fun KeysteadClientApp(
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } catch (error: Exception) {
-                if (!isCurrent()) return@launch
+                if (!resultIsCurrent()) return@launch
                 val message = error.message ?: error::class.simpleName.orEmpty()
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
@@ -961,12 +977,14 @@ fun KeysteadClientApp(
                 } finally {
                     actionGate.finish(group)
                     activeActionGroups = activeActionGroups - group
+                    finishPendingLock()
                 }
             }
         }
     }
 
     fun actionBusy(group: UiActionGroup): Boolean {
+        if (vaultLockState.pending) return true
         val conflicts =
             buildSet {
                 add(group)
@@ -1010,11 +1028,12 @@ fun KeysteadClientApp(
         return RecordInventorySnapshot(
             serverRecords = remote,
             inventory =
-            PersonalVaultRecordInventory.compare(
-                localRecords = current?.currentPersonalRecords(),
-                remoteRecords = remote,
-                localFingerprint = current?.fingerprintValue(),
-            ),
+                PersonalVaultRecordInventory.compare(
+                    localRecords = current?.currentPersonalRecords(),
+                    remoteRecords = remote,
+                    localFingerprint = current?.fingerprintValue(),
+                    authenticate = current?.let { it::authenticateSyncRecord },
+                ),
         )
     }
 
@@ -1251,10 +1270,7 @@ fun KeysteadClientApp(
     }
 
     fun syncStateStore(vaultFile: Path = Path.of(vaultDirectory)): SyncStateStore =
-        SyncStateStore(
-            vaultFile.parent?.resolve("sync")
-                ?: vaultFile.resolve("sync"),
-        )
+        SyncStateStore.forVault(vaultFile, serverUrl, serverUsername)
 
     fun performPullAndRetry() {
         val current = session ?: return
@@ -1327,7 +1343,8 @@ fun KeysteadClientApp(
                 comparisons
                     .filter {
                         it.status == RecordComparisonStatus.SERVER_NEWER ||
-                            it.status == RecordComparisonStatus.SERVER_ONLY
+                            it.status == RecordComparisonStatus.SERVER_ONLY ||
+                            it.status == RecordComparisonStatus.HASH_MISMATCH
                     }
                     .mapNotNull { entry ->
                         val serverPvr =
@@ -2465,6 +2482,7 @@ fun KeysteadClientApp(
             serverAvailability = serverAvailability,
             requestState = ownVaultAccessRequest?.state,
             approvedPackageAvailable = ownVaultAccessRequest?.approvedPackage != null,
+            requestExpiresAt = ownVaultAccessRequest?.expiresAt,
             targetPathAvailable = restoreTargetAvailable,
             masterPassphraseReady =
                 BackupFormModel.canUseNewMasterPassphrase(
@@ -2699,7 +2717,7 @@ fun KeysteadClientApp(
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val layoutMode = KeysteadWindowMetrics.modeForWidth(maxWidth.value)
         top.focess.keystead.client.ui.KeysteadAppShell(
-            vaultOpen = session != null,
+            vaultOpen = vaultLockState.exposesVault(session != null),
             destination = currentDestination,
             onDestinationChange = {
                 if (it != currentDestination &&

@@ -513,4 +513,5 @@
     <string name="verify_local_login__windows_hello">Verify with Windows Hello</string>
     <string name="waiting_for_approval">Waiting for another device to approve this request.</string>
     <string name="works_offline">Works offline</string>
+    <string name="record_comparison_status__unverified">Not authenticated</string>
 </resources>

@@ -17,6 +17,21 @@ class LocalVaultSyncPromotionTest {
     }
 
     @Test
+    fun promotingTombstonePreservesDeletionAndAdvancesRevision() {
+        open().use { session ->
+            val id = session.addLogin("Deleted", "alice", "secret", null)
+            session.delete(id)
+            val before = session.currentPersonalRecords().single()
+            val revision = session.promoteLocalRecord(id)
+            val after = session.currentPersonalRecords().single()
+            assertTrue(after.deleted())
+            assertEquals(before.secretId(), after.secretId())
+            assertTrue(revision > before.revision())
+            assertTrue(session.authenticateSyncRecord(after))
+        }
+    }
+
+    @Test
     fun promotingALoginPreservesItsPlaintextAndAdvancesTheRevision() {
         val session = open()
         session.use {

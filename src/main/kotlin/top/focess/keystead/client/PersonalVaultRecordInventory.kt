@@ -9,6 +9,7 @@ import top.focess.keystead.service.SyncRecordEventId
 
 internal enum class RecordComparisonStatus {
     MATCHED,
+    UNVERIFIED,
     LOCAL_ONLY,
     SERVER_ONLY,
     LOCAL_NEWER,
@@ -19,6 +20,7 @@ internal enum class RecordComparisonStatus {
 
 internal enum class RemoteRecordVerification {
     VERIFIED,
+    UNVERIFIED,
     LEGACY_UNVERIFIABLE,
     INVALID,
 }
@@ -101,6 +103,7 @@ internal data class PersonalVaultRecordInventory(
             localRecords: List<EncryptedSyncRecord>?,
             remoteRecords: List<PersonalVaultRecord>,
             localFingerprint: String? = localRecords?.firstOrNull()?.fingerprint(),
+            authenticate: ((EncryptedSyncRecord) -> Boolean)? = null,
         ): PersonalVaultRecordInventory {
             val serverFingerprint = remoteRecords.firstOrNull()?.fingerprint
             val effectiveLocalFingerprint =
@@ -124,7 +127,9 @@ internal data class PersonalVaultRecordInventory(
                             computedContentHash = computedContentHash,
                             profileCiphertextHash = RecordDisplayHash.of(remote.encryptedProfile),
                             envelopeCiphertextHash = RecordDisplayHash.of(remote.envelope),
-                            verification = remote.verification(computedContentHash),
+                            verification = remote.verification(computedContentHash, authenticate?.takeIf {
+                                remote.fingerprint == effectiveLocalFingerprint
+                            }),
                             deleted = remote.deleted,
                             createdAt = remote.createdAt,
                         )
@@ -136,7 +141,7 @@ internal data class PersonalVaultRecordInventory(
                     // Even on a vault-fingerprint mismatch the records are listed: local
                     // entries are marked local-only and server entries carry an other-vault
                     // badge in the UI, so orphaned records stay visible and removable.
-                    compareCurrent(localRecords, remoteRecords)
+                    compareCurrent(localRecords, remoteRecords, history.associate { it.serverSequence to it.verification })
                 }
             return PersonalVaultRecordInventory(
                 serverFingerprint = serverFingerprint,
@@ -154,6 +159,7 @@ internal data class PersonalVaultRecordInventory(
         private fun compareCurrent(
             localRecords: List<EncryptedSyncRecord>,
             remoteRecords: List<PersonalVaultRecord>,
+            verification: Map<Long, RemoteRecordVerification>,
         ): List<RecordComparisonEntry> {
             val localById =
                 localRecords
@@ -167,13 +173,14 @@ internal data class PersonalVaultRecordInventory(
                     }
             return (localById.keys + remoteById.keys)
                 .sortedBy(RecordDisplayHash::of)
-                .map { secretId -> compareOne(secretId, localById[secretId], remoteById[secretId]) }
+                .map { secretId -> compareOne(secretId, localById[secretId], remoteById[secretId], verification) }
         }
 
         private fun compareOne(
             secretId: String,
             local: EncryptedSyncRecord?,
             remote: PersonalVaultRecord?,
+            verification: Map<Long, RemoteRecordVerification>,
         ): RecordComparisonEntry {
             val localHash = local?.let(SyncRecordEventId::of)
             val remoteHash = remote?.contentHash()
@@ -181,13 +188,14 @@ internal data class PersonalVaultRecordInventory(
                 when {
                     remote == null -> RecordComparisonStatus.LOCAL_ONLY
                     remote.contentKey.isBlank() -> RecordComparisonStatus.LEGACY_UNVERIFIABLE
-                    remote.eventId != remoteHash -> RecordComparisonStatus.HASH_MISMATCH
+                    verification[remote.serverSequence] == RemoteRecordVerification.INVALID -> RecordComparisonStatus.HASH_MISMATCH
                     local == null -> RecordComparisonStatus.SERVER_ONLY
                     local.revision() > remote.revision -> RecordComparisonStatus.LOCAL_NEWER
                     local.revision() < remote.revision -> RecordComparisonStatus.SERVER_NEWER
                     // KVE2 event ids are stable across re-exports of unchanged content, so
                     // equality at equal revision is judged directly on the event ids.
-                    localHash == remoteHash -> RecordComparisonStatus.MATCHED
+                    localHash == remoteHash -> if (verification[remote.serverSequence] == RemoteRecordVerification.VERIFIED)
+                        RecordComparisonStatus.MATCHED else RecordComparisonStatus.UNVERIFIED
                     else -> RecordComparisonStatus.HASH_MISMATCH
                 }
             return RecordComparisonEntry(
@@ -220,12 +228,17 @@ internal object RecordDisplayHash {
         )
 }
 
-private fun PersonalVaultRecord.verification(computedContentHash: String?): RemoteRecordVerification =
-    when {
-        contentKey.isBlank() -> RemoteRecordVerification.LEGACY_UNVERIFIABLE
-        eventId == computedContentHash -> RemoteRecordVerification.VERIFIED
-        else -> RemoteRecordVerification.INVALID
-    }
+private fun PersonalVaultRecord.verification(
+    computedContentHash: String?,
+    authenticate: ((EncryptedSyncRecord) -> Boolean)?,
+): RemoteRecordVerification = when {
+    contentKey.isBlank() -> RemoteRecordVerification.LEGACY_UNVERIFIABLE
+    eventId != computedContentHash -> RemoteRecordVerification.INVALID
+    authenticate == null -> RemoteRecordVerification.UNVERIFIED
+    authenticate(EncryptedSyncRecord(fingerprint, secretId, revision, secretType,
+        encryptedProfile, envelope, deleted, contentKey)) -> RemoteRecordVerification.VERIFIED
+    else -> RemoteRecordVerification.INVALID
+}
 
 private fun PersonalVaultRecord.contentHash(): String? {
     // Legacy pre-KVE2 events carry an empty content key and can never verify.

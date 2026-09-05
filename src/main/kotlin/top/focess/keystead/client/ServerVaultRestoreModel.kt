@@ -26,12 +26,17 @@ data class ServerVaultRestoreModel(
             approvedPackageAvailable: Boolean,
             targetPathAvailable: Boolean,
             masterPassphraseReady: Boolean,
+            requestExpiresAt: java.time.Instant? = null,
+            now: java.time.Instant = java.time.Instant.now(),
         ): ServerVaultRestoreModel {
             if (!authenticated) {
                 return ServerVaultRestoreModel(ServerVaultRestoreStage.SIGN_IN_REQUIRED)
             }
             if (!serverAvailability.isOnline) {
                 return ServerVaultRestoreModel(ServerVaultRestoreStage.SERVER_OFFLINE)
+            }
+            if (requestExpiresAt != null && !now.isBefore(requestExpiresAt)) {
+                return ServerVaultRestoreModel(ServerVaultRestoreStage.REQUEST_EXPIRED, canCreateRequest = true)
             }
             if (requestState == ServerVaultAccessRequestState.APPROVED && approvedPackageAvailable) {
                 if (!targetPathAvailable) {

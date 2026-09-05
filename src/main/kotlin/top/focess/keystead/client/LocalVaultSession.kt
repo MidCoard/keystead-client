@@ -228,21 +228,28 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ) {
-        secretBufferFromString(username).use { usernameBuffer ->
-            secretBufferFromString(password).use { passwordBuffer ->
-                handle.updateLogin(SecretId(UUID.fromString(secretId))) { draft ->
-                    draft.title(title)
-                        .classification(SecretClassification(category, provider, software, account))
-                        .username(usernameBuffer)
-                        .password(passwordBuffer)
-                    if (!url.isNullOrBlank()) {
-                        draft.url(url)
-                    }
-                    if (!expiry.isNullOrBlank()) {
-                        draft.attribute("expiry", expiry)
+        val id = SecretId(UUID.fromString(secretId))
+        val metadata = handle.listSecrets().first { it.secretId() == id }
+        var notes = CharArray(0)
+        try {
+            handle.withLogin(id) { view -> view.withNotes { notes = it.copyOf() } }
+            secretBufferFromString(username).use { usernameBuffer ->
+                secretBufferFromString(password).use { passwordBuffer ->
+                    SecretBuffer.fromChars(notes).use { notesBuffer ->
+                        handle.updateLogin(id) { draft ->
+                            draft.title(title)
+                                .classification(SecretClassification(category, provider, software, account, metadata.classification().labels()))
+                                .username(usernameBuffer).password(passwordBuffer).notes(notesBuffer)
+                                .url(url?.takeIf { it.isNotBlank() })
+                            metadata.tags().forEach(draft::tag)
+                            metadata.profile().attributes().filterKeys { it != "expiry" }.forEach(draft::attribute)
+                            if (!expiry.isNullOrBlank()) draft.attribute("expiry", expiry)
+                        }
                     }
                 }
             }
+        } finally {
+            Wipe.wipe(notes)
         }
     }
 
@@ -261,6 +268,14 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ): String {
+        if (type == SecretType.SECURE_NOTE) {
+            return secretBufferFromString((fields["note"] ?: fields["body"]).orEmpty()).use { body ->
+                handle.saveSecureNote { draft ->
+                    draft.title(title).classification(SecretClassification(category, provider, software, account)).body(body)
+                    if (!expiry.isNullOrBlank()) draft.attribute("expiry", expiry)
+                }.value().toString()
+            }
+        }
         val buffers = fields.mapValues { secretBufferFromString(it.value) }
         return try {
             val secretId =
@@ -288,11 +303,27 @@ class LocalVaultSession private constructor(
         account: String? = null,
         expiry: String? = null,
     ) {
+        val id = SecretId(UUID.fromString(secretId))
+        val metadata = handle.listSecrets().first { it.secretId() == id }
+        val classification = SecretClassification(category, provider, software, account, metadata.classification().labels())
+        if (metadata.secretType() == SecretType.SECURE_NOTE) {
+            secretBufferFromString((fields["note"] ?: fields["body"]).orEmpty()).use { body ->
+                handle.updateSecureNote(id) { draft ->
+                    draft.title(title).classification(classification).body(body)
+                    metadata.tags().forEach(draft::tag)
+                    metadata.profile().attributes().filterKeys { it != "expiry" }.forEach(draft::attribute)
+                    if (!expiry.isNullOrBlank()) draft.attribute("expiry", expiry)
+                }
+            }
+            return
+        }
         val buffers = fields.mapValues { secretBufferFromString(it.value) }
         return try {
             handle.updateSecret(SecretId(UUID.fromString(secretId))) { draft ->
                 draft.title(title)
-                    .classification(SecretClassification(category, provider, software, account))
+                    .classification(classification)
+                metadata.tags().forEach(draft::tag)
+                metadata.profile().attributes().filterKeys { it != "expiry" }.forEach(draft::attribute)
                 if (!expiry.isNullOrBlank()) {
                     draft.attribute("expiry", expiry)
                 }
@@ -314,6 +345,8 @@ class LocalVaultSession private constructor(
                         url = view.url().orElse(null)
                         view.withUsername { username = String(it) }
                     }
+                } else if (metadata.secretType() == SecretType.SECURE_NOTE) {
+                    inspectorFields = listOf(SecretInspectorField("note", true))
                 } else {
                     val fieldSpecs =
                         SecretFormModel.specForOrNull(metadata.secretType())
@@ -355,8 +388,12 @@ class LocalVaultSession private constructor(
 
     fun revealField(secretId: String, fieldName: String): String {
         val output = arrayOfNulls<CharArray>(1)
-        handle.withSecret(SecretId(UUID.fromString(secretId))) { view ->
-            view.withField(fieldName) { value -> output[0] = value.copyOf() }
+        val id = SecretId(UUID.fromString(secretId))
+        if (handle.listSecrets().first { it.secretId() == id }.secretType() == SecretType.SECURE_NOTE) {
+            require(fieldName == "note" || fieldName == "body") { "Unknown secure-note field" }
+            handle.withSecureNote(id) { view -> view.withBody { output[0] = it.copyOf() } }
+        } else {
+            handle.withSecret(id) { view -> view.withField(fieldName) { output[0] = it.copyOf() } }
         }
         val chars = output[0] ?: CharArray(0)
         return try {
@@ -398,6 +435,13 @@ class LocalVaultSession private constructor(
         val metadata = handle.listSecrets().first { it.secretId().value().toString() == secretId }
         return if (metadata.secretType() == SecretType.LOGIN_PASSWORD) {
             loginEditSnapshot(secretId)
+        } else if (metadata.secretType() == SecretType.SECURE_NOTE) {
+            SecretEditSnapshot(
+                id = secretId, type = metadata.secretType().name, title = metadata.title(),
+                category = metadata.classification().category(), provider = metadata.classification().provider(),
+                software = metadata.classification().software(), account = metadata.classification().account(),
+                expiry = metadata.profile().attributes()["expiry"], fields = mapOf("note" to revealField(secretId, "note")),
+            )
         } else {
             structuredEditSnapshot(secretId)
         }
@@ -413,93 +457,11 @@ class LocalVaultSession private constructor(
      * returns an older matching event.
      */
     fun promoteLocalRecord(secretId: String): Long {
-        val id = SecretId(UUID.fromString(secretId))
-        val metadata = handle.listSecrets().first { it.secretId() == id }
-        when (metadata.secretType()) {
-            SecretType.LOGIN_PASSWORD -> promoteLogin(id)
-            else -> promoteStructured(id)
-        }
-        return handle.listSecrets().first { it.secretId() == id }.revision()
+        val record = handle.exportRecordsSince(0).first { it.secretId() == secretId }
+        handle.resolveSyncRecord(record)
+        return handle.exportRecordsSince(0).first { it.secretId() == secretId }.revision()
     }
 
-    private fun promoteLogin(id: SecretId) {
-        var title = ""
-        var classification = SecretClassification.none()
-        var tags = emptySet<String>()
-        var attributes = emptyMap<String, String>()
-        var url: String? = null
-        var username = CharArray(0)
-        var password = CharArray(0)
-        var notes = CharArray(0)
-        try {
-            handle.withLogin(id) { view ->
-                val metadata = view.metadata()
-                title = metadata.title()
-                classification = metadata.classification()
-                tags = metadata.tags()
-                attributes = metadata.profile().attributes()
-                url = view.url().orElse(null)
-                view.withUsername { username = it.copyOf() }
-                view.withPassword { password = it.copyOf() }
-                view.withNotes { notes = it.copyOf() }
-            }
-            SecretBuffer.fromChars(username).use { usernameBuffer ->
-                SecretBuffer.fromChars(password).use { passwordBuffer ->
-                    SecretBuffer.fromChars(notes).use { notesBuffer ->
-                        handle.updateLogin(id) { draft ->
-                            draft.title(title)
-                                .classification(classification)
-                                .username(usernameBuffer)
-                                .password(passwordBuffer)
-                                .url(url)
-                                .notes(notesBuffer)
-                            tags.forEach(draft::tag)
-                            attributes.forEach(draft::attribute)
-                        }
-                    }
-                }
-            }
-        } finally {
-            Wipe.wipe(username)
-            Wipe.wipe(password)
-            Wipe.wipe(notes)
-        }
-    }
-
-    private fun promoteStructured(id: SecretId) {
-        var title = ""
-        var classification = SecretClassification.none()
-        var tags = emptySet<String>()
-        var attributes = emptyMap<String, String>()
-        val values = linkedMapOf<String, CharArray>()
-        try {
-            handle.withSecret(id) { view ->
-                val metadata = view.metadata()
-                title = metadata.title()
-                classification = metadata.classification()
-                tags = metadata.tags()
-                attributes = metadata.profile().attributes()
-                view.orderedFieldNames().forEach { name ->
-                    view.withField(name) { values[name] = it.copyOf() }
-                }
-            }
-            val buffers = values.mapValues { SecretBuffer.fromChars(it.value) }
-            try {
-                handle.updateSecret(id) { draft ->
-                    draft.title(title).classification(classification)
-                    tags.forEach(draft::tag)
-                    attributes.forEach(draft::attribute)
-                    buffers.forEach(draft::field)
-                }
-            } finally {
-                buffers.values.forEach(SecretBuffer::close)
-            }
-        } finally {
-            values.values.forEach(Wipe::wipe)
-        }
-    }
-
-    /** Publishes a complete idempotent snapshot to the account's one personal event stream. */
     fun pushAllPersonalRecordsTo(client: KeysteadServerClient): Int =
         pushPersonalRecords(client, handle.exportRecordsSince(0))
 
@@ -565,8 +527,34 @@ class LocalVaultSession private constructor(
         return fields
     }
 
-    fun importSelectedSyncRecords(records: List<EncryptedSyncRecord>): SyncImportReport =
-        handle.importRecordsWithReport(records)
+    fun importSelectedSyncRecords(records: List<EncryptedSyncRecord>): SyncImportReport {
+        var imported = 0
+        var skipped = 0
+        val conflicts = mutableListOf<SyncImportConflict>()
+        val rejected = mutableListOf<SyncImportRejection>()
+        records.forEach { record ->
+            val local = handle.exportRecordsSince(0).firstOrNull { it.secretId() == record.secretId() }
+            if (local != null && local.revision() >= record.revision() && local.contentKey() != record.contentKey()) {
+                // Only the explicit conflict choice may replace an equal/older local head.
+                if (authenticateSyncRecord(record)) {
+                    handle.resolveSyncRecord(record)
+                    imported++
+                } else {
+                    rejected += SyncImportRejection(record.secretId(), record.revision(), SyncImportRejectionReason.UNVERIFIABLE)
+                }
+            } else {
+                val report = handle.importRecordsWithReport(listOf(record))
+                imported += report.imported()
+                skipped += report.skipped()
+                conflicts += report.conflicts()
+                rejected += report.rejected()
+            }
+        }
+        return SyncImportReport(imported, skipped, conflicts, rejected)
+    }
+
+    internal fun authenticateSyncRecord(record: EncryptedSyncRecord): Boolean =
+        runCatching { handle.previewSyncRecord(record) { } }.isSuccess
 
     private fun captureActivePayload(title: String, payload: SyncPayloadView): Map<String, String> {
         val fields = LinkedHashMap<String, String>()
@@ -626,8 +614,10 @@ class LocalVaultSession private constructor(
     fun pullPendingPersonalRecordsFrom(
         client: KeysteadServerClient,
         stateStore: SyncStateStore,
+        fromBeginning: Boolean = false,
     ): PersonalVaultPullResult {
         val fingerprint = fingerprintValue()
+        if (fromBeginning) stateStore.reset(fingerprint)
         var cursor = stateStore.lastPulledServerSequence(fingerprint)
         var imported = 0
         var skipped = 0
@@ -815,7 +805,10 @@ class LocalVaultSession private constructor(
                         service.openVault(file, password)
                     } else {
                         file.parent?.let { Files.createDirectories(it) }
-                        service.createVault(file, password)
+                        service.createVault(file, password).also { opened ->
+                            try { SyncStateStore.startNewLocalInstance(file) }
+                            catch (error: Throwable) { opened.close(); throw error }
+                        }
                     }
                 LocalVaultSession(service, handle, file)
             } finally {
@@ -839,6 +832,8 @@ class LocalVaultSession private constructor(
                 val handle =
                     FullVaultBackupService(crypto, clock)
                         .restore(file, input, backup, master)
+                try { SyncStateStore.startNewLocalInstance(file) }
+                catch (error: Throwable) { handle.close(); throw error }
                 LocalVaultSession(service, handle, file)
             } finally {
                 Wipe.wipe(backup)
@@ -872,6 +867,7 @@ class LocalVaultSession private constructor(
             file: Path,
             request: ServerVaultAccessRequest,
             exchangeSession: EphemeralVaultAccessSession,
+            clock: Clock = Clock.systemUTC(),
         ): LocalVaultSession {
             require(file.fileName.toString().endsWith(".kvault", ignoreCase = true)) {
                 "Server restore target must use the .kvault extension"
@@ -882,6 +878,7 @@ class LocalVaultSession private constructor(
             check(request.state == ServerVaultAccessRequestState.APPROVED) {
                 "Vault access request has not been approved"
             }
+            check(clock.instant().isBefore(request.expiresAt)) { "Vault access request has expired" }
             check(request.requestId == exchangeSession.requestId) {
                 "Approved request does not belong to this login session"
             }
@@ -895,6 +892,8 @@ class LocalVaultSession private constructor(
             try {
                 val decoded = VaultAccessRequestCodec.decode(canonical)
                 check(decoded.requestId() == request.requestId)
+                check(decoded.expiresAt() == request.expiresAt)
+                check(clock.instant().isBefore(decoded.expiresAt())) { "Vault access request has expired" }
                 check(decoded.accountId() == request.accountId)
                 check(decoded.serverOrigin() == request.serverOrigin)
                 check(decoded.keyAlgorithm() == request.keyAlgorithm)
@@ -938,7 +937,10 @@ class LocalVaultSession private constructor(
                             file,
                         )
                 }
-                return requireNotNull(opened)
+                return requireNotNull(opened).also { session ->
+                    try { SyncStateStore.startNewLocalInstance(file) }
+                    catch (error: Throwable) { session.close(); throw error }
+                }
             } finally {
                 Wipe.wipe(canonical)
                 publicKey?.let(Wipe::wipe)

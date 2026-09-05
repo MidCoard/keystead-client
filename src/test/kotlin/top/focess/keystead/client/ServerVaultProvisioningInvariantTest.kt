@@ -10,6 +10,22 @@ import top.focess.keystead.crypto.DefaultCryptoService
 
 class ServerVaultProvisioningInvariantTest {
     @Test
+    fun expiredApprovedPackageIsRejectedBeforeProvisioning() {
+        val root = createTempDirectory("expired-approved-restore")
+        val now = Instant.parse("2030-01-01T00:00:00Z")
+        try {
+            EphemeralVaultAccessSession.create("https://vault.example").use { exchange ->
+                val target = root.resolve("expired.kvault")
+                assertFailsWith<IllegalStateException> {
+                    LocalVaultSession.openProvisionedFromServer(target, approvedRequest(exchange).copy(expiresAt = now), exchange,
+                        java.time.Clock.fixed(now, java.time.ZoneOffset.UTC))
+                }
+                kotlin.test.assertFalse(Files.exists(target))
+            }
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test
     fun restoreRequiresANewKvaultTargetBeforeAnyServerCall() {
         val root = createTempDirectory("keystead-restore-invariant-")
         EphemeralVaultAccessSession.create("https://vault.example").use { exchange ->

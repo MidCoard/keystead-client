@@ -47,7 +47,7 @@ class ServerVaultProvisioningService {
                 throw error
             }
             return try {
-                val pulled = opened.pullPendingPersonalRecordsFrom(client, stateStore)
+                val pulled = opened.pullPendingPersonalRecordsFrom(client, stateStore, fromBeginning = true)
                 ServerVaultProvisioningResult(
                     session = opened,
                     pulledRecords = pulled.imported,

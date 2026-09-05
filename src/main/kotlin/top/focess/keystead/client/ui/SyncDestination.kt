@@ -259,6 +259,7 @@ private fun UnifiedRecordRow(
     val accent =
         when (entry.status) {
             RecordComparisonStatus.MATCHED -> MaterialTheme.colorScheme.primary
+            RecordComparisonStatus.UNVERIFIED,
             RecordComparisonStatus.LOCAL_ONLY,
             RecordComparisonStatus.SERVER_ONLY,
             RecordComparisonStatus.LOCAL_NEWER,
