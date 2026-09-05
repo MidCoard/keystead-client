@@ -3,12 +3,40 @@ package top.focess.keystead.client
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import top.focess.keystead.service.EncryptedSyncRecord
 import top.focess.keystead.service.SyncRecordEventId
 
 class PersonalVaultRecordInventoryTest {
+    @Test
+    fun unavailableVerifierIsNotMisreportedAsCorruptCiphertext() {
+        val row = encrypted("unavailable", 1, "payload")
+        assertFailsWith<IllegalStateException> {
+            PersonalVaultRecordInventory.compare(listOf(row), listOf(remote(1, row)),
+                canonicalContentKey = { throw IllegalStateException("Vault closed") })
+        }
+    }
+
+    @Test
+    fun authenticatedLegacyRepresentationMatchesWithoutPromotingButInvalidEventDoesNot() {
+        val local = encrypted("legacy-windows", 7, "payload", contentKey = "canonical-key")
+        val legacy = remote(21, encrypted("legacy-windows", 7, "payload", contentKey = "legacy-crlf-key"))
+        val matched = PersonalVaultRecordInventory.compare(
+            listOf(local), listOf(legacy), canonicalContentKey = { "canonical-key" },
+        ).comparisons!!.single()
+        assertEquals(RecordComparisonStatus.MATCHED, matched.status)
+        assertFalse(SyncUploadConflictResolver.needsPromotion(matched))
+        // Canonical comparison must never bypass the advertised event-id check.
+        val invalid = PersonalVaultRecordInventory.compare(
+            listOf(local), listOf(legacy.copy(eventId = "tampered")),
+            canonicalContentKey = { error("Must reject event ID before inspecting ciphertext") },
+        )
+        assertEquals(RecordComparisonStatus.HASH_MISMATCH, invalid.comparisons!!.single().status)
+        assertEquals(1, invalid.invalidRemoteRecords)
+    }
+
     @Test
     fun exposesCompleteHashesForTheRecordAndEachEncryptedComponent() {
         val record =
@@ -53,7 +81,7 @@ class PersonalVaultRecordInventoryTest {
 
         assertFalse(comparison.localDeleted ?: true)
         assertTrue(comparison.serverDeleted ?: false)
-        assertEquals(RecordComparisonStatus.HASH_MISMATCH, comparison.status)
+        assertEquals(RecordComparisonStatus.CONFLICT, comparison.status)
     }
 
     @Test
@@ -120,7 +148,7 @@ class PersonalVaultRecordInventoryTest {
 
         val inventory = verifiedInventory(local, listOf(remoteRecord, invalidHistoryRecord))
 
-        assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.statusOf("content-conflict"))
+        assertEquals(RecordComparisonStatus.CONFLICT, inventory.statusOf("content-conflict"))
         assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.statusOf("invalid-hash"))
         assertEquals(1, inventory.invalidRemoteRecords)
         assertEquals(0, inventory.legacyRemoteRecords)

@@ -1,5 +1,10 @@
 package top.focess.keystead.client
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import top.focess.keystead.client.i18n.AppLocale
+
 enum class DesktopCloseAction { LOCK_AND_HIDE, EXIT }
 
 object DesktopTrayPolicy {
@@ -15,6 +20,7 @@ object DesktopClosePolicy {
 }
 
 class DesktopAppController {
+    internal var locale by mutableStateOf(AppLocale.ENGLISH)
     internal var onLockVault: () -> Unit = {}
 
     fun lockVault() = onLockVault()

@@ -534,14 +534,20 @@ class LocalVaultSession private constructor(
         val rejected = mutableListOf<SyncImportRejection>()
         records.forEach { record ->
             val local = handle.exportRecordsSince(0).firstOrNull { it.secretId() == record.secretId() }
-            if (local != null && local.revision() >= record.revision() && local.contentKey() != record.contentKey()) {
+            val canonicalKey = verifiedCanonicalContentKey(record)
+            if (canonicalKey == null) {
+                rejected += SyncImportRejection(record.secretId(), record.revision(), SyncImportRejectionReason.UNVERIFIABLE)
+                return@forEach
+            }
+            val equivalentContent = local != null && local.fingerprint() == record.fingerprint() &&
+                local.secretType() == record.secretType() && local.deleted() == record.deleted() &&
+                local.contentKey() == canonicalKey
+            if (equivalentContent && local.revision() == record.revision()) {
+                skipped++
+            } else if (local != null && local.revision() >= record.revision() && !equivalentContent) {
                 // Only the explicit conflict choice may replace an equal/older local head.
-                if (authenticateSyncRecord(record)) {
-                    handle.resolveSyncRecord(record)
-                    imported++
-                } else {
-                    rejected += SyncImportRejection(record.secretId(), record.revision(), SyncImportRejectionReason.UNVERIFIABLE)
-                }
+                handle.resolveSyncRecord(record)
+                imported++
             } else {
                 val report = handle.importRecordsWithReport(listOf(record))
                 imported += report.imported()
@@ -552,6 +558,18 @@ class LocalVaultSession private constructor(
         }
         return SyncImportReport(imported, skipped, conflicts, rejected)
     }
+
+    private fun verifiedCanonicalContentKey(record: EncryptedSyncRecord): String? =
+        try {
+            handle.canonicalSyncContentKey(record)
+        } catch (_: top.focess.keystead.service.ValidationException) {
+            null
+        } catch (_: top.focess.keystead.crypto.CryptoException) {
+            null
+        }
+
+    internal fun canonicalSyncContentKey(record: EncryptedSyncRecord): String =
+        handle.canonicalSyncContentKey(record)
 
     internal fun authenticateSyncRecord(record: EncryptedSyncRecord): Boolean =
         runCatching { handle.previewSyncRecord(record) { } }.isSuccess

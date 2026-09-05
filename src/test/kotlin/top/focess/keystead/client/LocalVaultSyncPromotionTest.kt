@@ -84,7 +84,7 @@ class LocalVaultSyncPromotionTest {
 
     @Test
     fun onlyAnEqualRevisionContentMismatchNeedsPromotionAfterAReupload() {
-        val conflict = comparison(RecordComparisonStatus.HASH_MISMATCH, 4, 4)
+        val conflict = comparison(RecordComparisonStatus.CONFLICT, 4, 4)
         val invalidOrDifferentRevision = comparison(RecordComparisonStatus.HASH_MISMATCH, 5, 4)
         val matched = comparison(RecordComparisonStatus.MATCHED, 4, 4)
 
@@ -97,7 +97,7 @@ class LocalVaultSyncPromotionTest {
     fun selectedUploadPromotesAndReuploadsAnEqualRevisionConflict() {
         val sequence = mutableListOf<String>()
         var refreshCount = 0
-        val conflict = comparison(RecordComparisonStatus.HASH_MISMATCH, 4, 4)
+        val conflict = comparison(RecordComparisonStatus.CONFLICT, 4, 4)
 
         val pushed =
             SelectedRecordUploadCoordinator.upload(

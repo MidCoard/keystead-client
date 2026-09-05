@@ -188,7 +188,7 @@ private fun RecordInventory(
                 }
                 if (inventory.invalidRemoteRecords > 0) {
                     Text(
-                        strings.hashInvalid,
+                        strings.invalidRemoteHistory(inventory.invalidRemoteRecords),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
@@ -259,6 +259,7 @@ private fun UnifiedRecordRow(
     val accent =
         when (entry.status) {
             RecordComparisonStatus.MATCHED -> MaterialTheme.colorScheme.primary
+            RecordComparisonStatus.CONFLICT,
             RecordComparisonStatus.UNVERIFIED,
             RecordComparisonStatus.LOCAL_ONLY,
             RecordComparisonStatus.SERVER_ONLY,

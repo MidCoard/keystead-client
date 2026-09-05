@@ -355,6 +355,7 @@ internal interface Strings {
     val serverEnvelopeCiphertextHash: String
     val hashVerified: String
     val hashInvalid: String
+    fun invalidRemoteHistory(events: Int): String
     fun legacyRemoteHistory(events: Int): String
     fun remoteRecordSummary(events: Int, current: Int): String
     fun recordComparisonStatus(status: RecordComparisonStatus): String
@@ -391,6 +392,7 @@ internal interface Strings {
     val conflictDeletedTitle: String
     val conflictNewerTitle: String
     val conflictDeletedWarning: String
+    fun errorMessage(error: Throwable): String
     fun conflictMessage(error: KeysteadRevisionConflictException): String
 
     val deleteSecretTitle: String

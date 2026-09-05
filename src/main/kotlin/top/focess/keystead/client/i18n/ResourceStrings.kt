@@ -348,6 +348,7 @@ private class ResourceStrings(
     override val serverEnvelopeCiphertextHash: String get() = text("server_envelope_ciphertext_hash")
     override val hashVerified: String get() = text("hash_verified")
     override val hashInvalid: String get() = text("hash_invalid")
+    override fun invalidRemoteHistory(events: Int): String = text("invalid_remote_history", events)
     override fun legacyRemoteHistory(events: Int): String = text("legacy_remote_history", events)
     override fun remoteRecordSummary(events: Int, current: Int): String = text("remote_record_summary", events, current)
     override fun recordComparisonStatus(status: RecordComparisonStatus): String = enumText("record_comparison_status", status)
@@ -500,6 +501,15 @@ private class ResourceStrings(
         }
 
     override fun secretFieldLabel(fieldName: String): String {
+        when (fieldName) {
+            "title" -> return text("field_title")
+            "username" -> return text("field_username")
+            "password" -> return text("field_password")
+            "url" -> return text("field_url")
+            "body" -> return text("secret_field_label__body")
+            "notes" -> return text("secret_field_label__note")
+            "deleted" -> return recordStateLabel
+        }
         val suffix = when (fieldName) {
             "note" -> "note"
             "publicKey" -> "public_key"
@@ -538,6 +548,14 @@ private class ResourceStrings(
             revision,
         )
 
+    override fun errorMessage(error: Throwable): String {
+        if (error is KeysteadRevisionConflictException) return conflictMessage(error)
+        if (locale == AppLocale.ENGLISH) return error.message ?: text("error_generic")
+        error.message?.takeIf { it in values.values }?.let { return it }
+        val key = localizedErrorKey(error)
+        return if (key == null) text("error_generic") else text(key)
+    }
+
     override fun conflictMessage(error: KeysteadRevisionConflictException): String {
         val latest = error.serverRevision ?: error.latestRevision
         val rejected = error.clientRevision ?: error.rejectedRevision
@@ -545,6 +563,7 @@ private class ResourceStrings(
         if (latest != null && rejected != null) {
             return text("conflict_revision_message", prefix, latest, rejected)
         }
+        if (locale == AppLocale.CHINESE) return text("conflict_pull_again", text("conflict_default_message"))
         val message = error.message ?: text("conflict_default_message")
         val alreadyActionable =
             message.contains("pull before pushing", ignoreCase = true) ||

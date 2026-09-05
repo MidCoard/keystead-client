@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import top.focess.keystead.client.PersonalVaultRecord
 import top.focess.keystead.client.RecordComparisonStatus
 import top.focess.keystead.client.i18n.Strings
+import top.focess.keystead.model.SecretType
 import top.focess.keystead.service.EncryptedSyncRecord
 
 internal data class SyncFieldDiff(val name: String, val local: String, val server: String, val changed: Boolean)
@@ -52,6 +53,22 @@ internal fun buildSyncDiff(local: Map<String, String>, server: Map<String, Strin
         val s = server[name].orEmpty()
         SyncFieldDiff(name, l, s, l != s)
     }
+}
+
+internal fun syncComparisonTypeLabel(type: String, strings: Strings): String =
+    runCatching { SecretType.valueOf(type) }.getOrNull()?.let(strings::secretTypeLabel) ?: type
+
+internal fun syncComparisonFieldValue(
+    fieldName: String,
+    value: String,
+    deletionRecord: Boolean,
+    strings: Strings,
+): String {
+    // Only tombstone markers are UI state. A secret whose text is "true" remains unchanged.
+    if (deletionRecord && fieldName == "deleted") {
+        value.toBooleanStrictOrNull()?.let { return strings.recordStateValue(it) }
+    }
+    return value.ifBlank { "—" }
 }
 
 @Composable
@@ -94,7 +111,7 @@ internal fun SyncCompareDialog(
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
                                 Text(
-                                    "${item.title}  [${item.secretType}]",
+                                    "${item.title}  [${syncComparisonTypeLabel(item.secretType, strings)}]",
                                     fontWeight = FontWeight.SemiBold,
                                     style = MaterialTheme.typography.bodySmall,
                                 )
@@ -105,14 +122,14 @@ internal fun SyncCompareDialog(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Text(
-                                            f.name,
+                                            strings.secretFieldLabel(f.name),
                                             style = MaterialTheme.typography.labelSmall,
                                             fontFamily = FontFamily.Monospace,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.weight(1f),
                                         )
                                         Text(
-                                            f.local.ifBlank { "—" },
+                                            syncComparisonFieldValue(f.name, f.local, item.serverRecord.deleted(), strings),
                                             style = MaterialTheme.typography.labelSmall,
                                             color =
                                                 if (f.changed) {
@@ -124,7 +141,7 @@ internal fun SyncCompareDialog(
                                         )
                                         Text("→", style = MaterialTheme.typography.labelSmall)
                                         Text(
-                                            f.server.ifBlank { "—" },
+                                            syncComparisonFieldValue(f.name, f.server, item.serverRecord.deleted(), strings),
                                             style = MaterialTheme.typography.labelSmall,
                                             color =
                                                 if (f.changed) {

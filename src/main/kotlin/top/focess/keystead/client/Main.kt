@@ -27,7 +27,6 @@ import com.sun.jna.platform.win32.WinDef
 import java.awt.Dimension
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -116,10 +115,7 @@ fun main(args: Array<String>) = application {
     var windowVisible by remember { mutableStateOf(true) }
     val desktopController = remember { DesktopAppController() }
     val trayEnabled = remember { DesktopTrayPolicy.isEnabled(isTraySupported, args.asList()) }
-    val trayStrings =
-        remember {
-            AppLocale.forLanguageTag(Locale.getDefault().toLanguageTag()).strings
-        }
+    val trayStrings = desktopController.locale.strings
     if (trayEnabled) {
         Tray(
             icon = appIcon,
@@ -222,7 +218,7 @@ fun KeysteadClientApp(
     val languageSettings = remember(effectiveSettingsStore) {
         LanguageSettings(effectiveSettingsStore)
     }
-    var locale by remember { mutableStateOf(languageSettings.load() ?: AppLocale.ENGLISH) }
+    var locale by remember(languageSettings) { mutableStateOf(languageSettings.load() ?: AppLocale.ENGLISH) }
     val onLocaleChange: (AppLocale) -> Unit = { newLocale ->
         locale = newLocale
         languageSettings.save(newLocale)
@@ -241,7 +237,8 @@ fun KeysteadClientApp(
         val listener = DesktopUserActivityListener(recordUserActivity)
         onDispose(listener::close)
     }
-    val strings = locale.strings
+    val strings by rememberUpdatedState(locale.strings)
+    androidx.compose.runtime.SideEffect { desktopController.locale = locale }
     val currentTouchIdAuthenticationReason by
         rememberUpdatedState(strings.touchIdAuthenticationReason)
     val serverConnectionSettings =
@@ -409,7 +406,11 @@ fun KeysteadClientApp(
     var serverRestoreNewMasterPassphraseConfirmation by remember { mutableStateOf("") }
     val actionFeedbackState = remember { ActionFeedbackState(strings.vaultLocked) }
     var status by actionFeedbackState
-    var unlockError by remember { mutableStateOf<String?>(null) }
+    var unlockError by remember(locale) { mutableStateOf<String?>(null) }
+    LaunchedEffect(locale) {
+        actionFeedbackState.reset(if (session == null) strings.vaultLocked else strings.vaultOpen)
+        accountAuthUiState = accountAuthUiState.onInputChanged()
+    }
     var currentDestination by remember {
         mutableStateOf(top.focess.keystead.client.ui.KeysteadDestination.SECRETS)
     }
@@ -592,7 +593,7 @@ fun KeysteadClientApp(
             localUnlockStorageModel = storageModel
             localUnlockDescriptor = descriptor
         } catch (error: Exception) {
-            actionFeedbackState.error(error.message ?: strings.localLoginCredentialUnavailable)
+            actionFeedbackState.error(strings.errorMessage(error))
         }
         secureStorageModel =
             withContext(Dispatchers.IO) {
@@ -622,7 +623,7 @@ fun KeysteadClientApp(
                 }
                 actionFeedbackState.error(
                     strings.couldNotRestoreServerSession(
-                        error.message ?: error::class.simpleName ?: "",
+                        strings.errorMessage(error),
                     ),
                 )
             }
@@ -922,7 +923,7 @@ fun KeysteadClientApp(
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
                 }
-                val message = strings.couldNotReachServer(error::class.simpleName ?: "IOException")
+                val message = strings.errorMessage(error)
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } catch (error: PersonalVaultMismatchException) {
@@ -948,7 +949,7 @@ fun KeysteadClientApp(
                                     localRecords = current?.currentPersonalRecords(),
                                     remoteRecords = remote,
                                     localFingerprint = current?.fingerprintValue(),
-                                    authenticate = current?.let { it::authenticateSyncRecord },
+                                    canonicalContentKey = current?.let { it::canonicalSyncContentKey },
                                 ),
                             )
                         }
@@ -963,12 +964,12 @@ fun KeysteadClientApp(
                     serverAvailability =
                         ServerAvailabilityTransitions.afterServerAction(serverAvailability, error)
                 }
-                val message = error.message ?: error::class.simpleName.orEmpty()
+                val message = strings.errorMessage(error)
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } catch (error: Exception) {
                 if (!resultIsCurrent()) return@launch
-                val message = error.message ?: error::class.simpleName.orEmpty()
+                val message = strings.errorMessage(error)
                 actionFeedbackState.error(message)
                 onError?.invoke(message)
             } finally {
@@ -1032,7 +1033,7 @@ fun KeysteadClientApp(
                     localRecords = current?.currentPersonalRecords(),
                     remoteRecords = remote,
                     localFingerprint = current?.fingerprintValue(),
-                    authenticate = current?.let { it::authenticateSyncRecord },
+                    canonicalContentKey = current?.let { it::canonicalSyncContentKey },
                 ),
         )
     }
@@ -1121,7 +1122,7 @@ fun KeysteadClientApp(
                 .getOrElse {
                     actionFeedbackState.error(
                         strings.vaultFileDeleteFailed(
-                            it.message ?: it::class.simpleName.orEmpty(),
+                            strings.errorMessage(it),
                         ),
                     )
                     return
@@ -1344,7 +1345,8 @@ fun KeysteadClientApp(
                     .filter {
                         it.status == RecordComparisonStatus.SERVER_NEWER ||
                             it.status == RecordComparisonStatus.SERVER_ONLY ||
-                            it.status == RecordComparisonStatus.HASH_MISMATCH
+                            it.status == RecordComparisonStatus.HASH_MISMATCH ||
+                            it.status == RecordComparisonStatus.CONFLICT
                     }
                     .mapNotNull { entry ->
                         val serverPvr =

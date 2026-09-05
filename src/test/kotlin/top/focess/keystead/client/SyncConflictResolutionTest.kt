@@ -29,7 +29,7 @@ class SyncConflictResolutionTest {
                         listOf(remote(chosen)),
                         authenticate = local::authenticateSyncRecord,
                     )
-                    assertEquals(RecordComparisonStatus.HASH_MISMATCH, inventory.comparisons!!.single().status)
+                    assertEquals(RecordComparisonStatus.CONFLICT, inventory.comparisons!!.single().status)
                     assertEquals(RemoteRecordVerification.VERIFIED, inventory.remoteHistory.single().verification)
                     assertEquals(1, local.importSelectedSyncRecords(listOf(chosen)).imported())
                     assertEquals("server choice", local.revealPassword(id))

@@ -79,9 +79,9 @@ class LiveTwoClientVaultFlowTest {
                                 PersonalVaultRecordInventory.compare(
                                     clientA.currentPersonalRecords(),
                                     clientAAccount.client().listAllPersonalRecords(),
-                                    authenticate = clientA::authenticateSyncRecord,
+                                    canonicalContentKey = clientA::canonicalSyncContentKey,
                                 ).comparisons.orEmpty().single { it.secretId == secretId }
-                            assertEquals(RecordComparisonStatus.HASH_MISMATCH, before.status)
+                            assertEquals(RecordComparisonStatus.CONFLICT, before.status)
 
                             assertEquals(
                                 2,
@@ -97,7 +97,7 @@ class LiveTwoClientVaultFlowTest {
                                         PersonalVaultRecordInventory.compare(
                                             clientA.currentPersonalRecords(),
                                             clientAAccount.client().listAllPersonalRecords(),
-                                    authenticate = clientA::authenticateSyncRecord,
+                                    canonicalContentKey = clientA::canonicalSyncContentKey,
                                         ).comparisons.orEmpty()
                                     },
                                     promote = clientA::promoteLocalRecord,
@@ -107,7 +107,7 @@ class LiveTwoClientVaultFlowTest {
                                 PersonalVaultRecordInventory.compare(
                                     clientA.currentPersonalRecords(),
                                     clientAAccount.client().listAllPersonalRecords(),
-                                    authenticate = clientA::authenticateSyncRecord,
+                                    canonicalContentKey = clientA::canonicalSyncContentKey,
                                 ).comparisons.orEmpty().single { it.secretId == secretId }
                             assertEquals(RecordComparisonStatus.MATCHED, resolved.status)
                             assertEquals("windows-choice", clientA.editSnapshot(secretId).password)

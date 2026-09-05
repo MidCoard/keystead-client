@@ -48,6 +48,11 @@ internal class ActionFeedbackState(initialStatus: String) : ReadWriteProperty<An
         publish(message, ActionFeedbackTone.ERROR)
     }
 
+    fun reset(message: String) {
+        status = message
+        current = null
+    }
+
     fun dismiss(feedbackId: Long) {
         if (current?.id == feedbackId) current = null
     }
