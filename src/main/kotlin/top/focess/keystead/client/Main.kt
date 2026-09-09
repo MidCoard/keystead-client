@@ -116,7 +116,15 @@ fun main(args: Array<String>) = application {
     val desktopController = remember { DesktopAppController() }
     val trayEnabled = remember { DesktopTrayPolicy.isEnabled(isTraySupported, args.asList()) }
     val trayStrings = desktopController.locale.strings
-    if (trayEnabled) {
+    if (trayEnabled && System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        WindowsTray(
+            image = brandImage,
+            strings = trayStrings,
+            onOpen = { windowVisible = true },
+            onLock = desktopController::lockVault,
+            onQuit = ::exitApplication,
+        )
+    } else if (trayEnabled) {
         Tray(
             icon = appIcon,
             tooltip = trayStrings.appTitle,

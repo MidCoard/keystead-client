@@ -34,6 +34,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.PopupProperties
 import top.focess.keystead.client.SecretFormModel
 import top.focess.keystead.client.LoginUsernameSuggestions
 import top.focess.keystead.client.PasswordBreachResult
@@ -347,12 +348,14 @@ private fun LoginSecretFields(
                 Modifier.fillMaxWidth().onGloballyPositioned {
                     usernameFieldWidthPixels = it.size.width
                 }.onFocusChanged {
-                    if (it.isFocused) suggestionsExpanded = true
+                    suggestionsExpanded = it.isFocused
                 },
         )
         DropdownMenu(
             expanded = enabled && suggestionsExpanded && matchingUsernames.isNotEmpty(),
             onDismissRequest = { suggestionsExpanded = false },
+            // Suggestions must not steal typing/IME focus from the username field.
+            properties = PopupProperties(focusable = false),
             modifier =
                 if (usernameFieldWidthPixels > 0) {
                     Modifier.width(
