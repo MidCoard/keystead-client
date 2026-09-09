@@ -9,12 +9,12 @@ plugins {
 }
 
 group = "top.focess"
-version = "1.1.4"
+version = "1.1.5"
 
 val isMacHost = System.getProperty("os.name").lowercase().contains("mac")
 val macTouchIdHelper = layout.buildDirectory.file("app-resources/macos/keystead-mac-secure-store")
 val unsignedMacTouchIdHelper = layout.buildDirectory.file("tmp/mac-touch-id/keystead-mac-secure-store")
-val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.4.dmg")
+val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.5.dmg")
 val compileMacTouchIdHelperBinary =
     tasks.register<Exec>("compileMacTouchIdHelperBinary") {
         onlyIf { isMacHost }
@@ -193,7 +193,7 @@ compose.desktop {
             modules("java.net.http")
             // Installer version mirrors the project release version. Bump per release.
             // macOS DMG requires MAJOR > 0; the project is now 1.x so Dmg is built.
-            packageVersion = "1.1.4"
+            packageVersion = "1.1.5"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first

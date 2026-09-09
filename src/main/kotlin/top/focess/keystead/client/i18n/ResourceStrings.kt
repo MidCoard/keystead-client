@@ -162,6 +162,8 @@ private class ResourceStrings(
     override val expiryReviewRotate: String get() = text("expiry_review_rotate")
     override val selectedSecret: String get() = text("selected_secret")
     override val secretDetails: String get() = text("secret_details")
+    override val showSyncDetails: String get() = text("show_sync_details")
+    override val hideSyncDetails: String get() = text("hide_sync_details")
     override val fieldLabels: String get() = text("field_labels")
     override val fieldTags: String get() = text("field_tags")
     override val fieldCreatedAt: String get() = text("field_created_at")

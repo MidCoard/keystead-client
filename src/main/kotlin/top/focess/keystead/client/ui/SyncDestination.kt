@@ -7,14 +7,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -231,16 +241,46 @@ private fun RecordInventory(
             style = MaterialTheme.typography.bodySmall,
         )
     } else {
-        comparisons.forEach { entry ->
-            UnifiedRecordRow(
-                entry = entry,
-                localTitle = localRecordTitles[entry.secretId],
-                otherVault = inventory.vaultMismatch && entry.serverRevision != null,
-                uploadEnabled = actionsEnabled && !inventory.vaultMismatch,
-                removeEnabled = serverActionsEnabled,
-                onUpload = { onUploadSelected(setOf(entry.secretId)) },
-                onRemoveServerCopy = { onRequestRemoveSelected(setOf(entry.secretId)) },
-            )
+        val recordsByType = comparisons.groupBy { it.secretType }
+        val knownTypes = SecretType.entries.map { it.name }
+        val orderedTypes = knownTypes + (recordsByType.keys - knownTypes.toSet()).sorted()
+        orderedTypes.forEach { type ->
+            val entries = recordsByType[type] ?: return@forEach
+            key(type) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            secretTypeLabel(type),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "(${entries.size})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    entries.forEach { entry ->
+                        key(entry.secretId) {
+                            UnifiedRecordRow(
+                                entry = entry,
+                                localTitle = localRecordTitles[entry.secretId],
+                                otherVault = inventory.vaultMismatch && entry.serverRevision != null,
+                                uploadEnabled = actionsEnabled && !inventory.vaultMismatch,
+                                removeEnabled = serverActionsEnabled,
+                                onUpload = { onUploadSelected(setOf(entry.secretId)) },
+                                onRemoveServerCopy = { onRequestRemoveSelected(setOf(entry.secretId)) },
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -414,18 +454,29 @@ private fun SideBadge(label: String, color: Color) {
 
 @Composable
 private fun HashEvidenceBlock(content: @Composable () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraSmall,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        SelectionContainer {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                content()
+    val strings = LocalStrings.current
+    var expanded by remember { mutableStateOf(false) }
+    TextButton(onClick = { expanded = !expanded }) {
+        Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+        )
+        Text(if (expanded) strings.hideSyncDetails else strings.showSyncDetails)
+    }
+    if (expanded) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraSmall,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        ) {
+            SelectionContainer {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    content()
+                }
             }
         }
     }

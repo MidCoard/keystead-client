@@ -543,4 +543,6 @@
     <string name="secret_field_label__body">Body</string>
     <string name="record_comparison_status__conflict">Content conflict</string>
     <string name="invalid_remote_history">%1$d server events failed integrity verification. Current record status is shown below.</string>
+    <string name="show_sync_details">Show details</string>
+    <string name="hide_sync_details">Hide details</string>
 </resources>

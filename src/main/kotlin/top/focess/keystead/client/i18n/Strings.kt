@@ -156,6 +156,8 @@ internal interface Strings {
     val expiryReviewRotate: String
     val selectedSecret: String
     val secretDetails: String
+    val showSyncDetails: String
+    val hideSyncDetails: String
     val fieldLabels: String
     val fieldTags: String
     val fieldCreatedAt: String
