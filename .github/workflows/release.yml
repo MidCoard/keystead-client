@@ -59,6 +59,10 @@ jobs:
       - name: Package native distribution
         working-directory: keystead-client
         run: ${{ matrix.gradle }} packageDistributionForCurrentOS --no-daemon
+      - name: Build Windows portable application
+        if: runner.os == 'Windows'
+        working-directory: keystead-client
+        run: .\gradlew.bat createDistributable --no-daemon
       - name: Archive Windows portable application
         if: runner.os == 'Windows'
         working-directory: keystead-client
