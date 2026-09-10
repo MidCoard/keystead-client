@@ -9,12 +9,33 @@ plugins {
 }
 
 group = "top.focess"
-version = "1.1.5"
+version = "1.1.6"
 
 val isMacHost = System.getProperty("os.name").lowercase().contains("mac")
+val isWindowsHost = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+val windowsAwtFontConfig = layout.buildDirectory.file("app-resources/windows/awt-fontconfig.properties")
+val windowsJavaLauncher = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(25))
+}
+val prepareWindowsAwtFontConfig = tasks.register("prepareWindowsAwtFontConfig") {
+    onlyIf { isWindowsHost }
+    val source = windowsJavaLauncher.map { it.metadata.installationPath.file("lib/fontconfig.properties.src") }
+    if (isWindowsHost) inputs.file(source)
+    outputs.file(windowsAwtFontConfig)
+    doLast {
+        // JDK 25's default UTF-8 AWT sequence omits Chinese, even on zh_CN Windows.
+        // Extend the JDK configuration, preserving its other fonts and locale mappings.
+        val original = source.get().asFile.readText()
+        val defaultSequence = "sequence.allfonts=alphabetic/default,dingbats,symbol"
+        check(defaultSequence in original) { "Review the Windows JDK font configuration before packaging" }
+        val target = windowsAwtFontConfig.get().asFile
+        target.parentFile.mkdirs()
+        target.writeText(original.replace(defaultSequence, "sequence.allfonts=alphabetic/default,chinese-ms936,dingbats,symbol"))
+    }
+}
 val macTouchIdHelper = layout.buildDirectory.file("app-resources/macos/keystead-mac-secure-store")
 val unsignedMacTouchIdHelper = layout.buildDirectory.file("tmp/mac-touch-id/keystead-mac-secure-store")
-val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.5.dmg")
+val macDmgFile = layout.buildDirectory.file("compose/binaries/main/dmg/Keystead-1.1.6.dmg")
 val compileMacTouchIdHelperBinary =
     tasks.register<Exec>("compileMacTouchIdHelperBinary") {
         onlyIf { isMacHost }
@@ -88,6 +109,12 @@ val fixMacDmgVolumeIcon =
 
 tasks.configureEach {
     if (name == "prepareAppResources") dependsOn(compileMacTouchIdHelper)
+    if (isWindowsHost && name in listOf("prepareAppResources", "prepareReleaseAppResources", "run", "runRelease", "test")) {
+        dependsOn(prepareWindowsAwtFontConfig)
+    }
+    if (isWindowsHost && this is JavaExec && name in listOf("run", "runRelease")) {
+        doFirst { jvmArgs("-Dsun.awt.fontconfig=${windowsAwtFontConfig.get().asFile.absolutePath}") }
+    }
     if (name == "packageDmg") finalizedBy(fixMacDmgVolumeIcon)
     if (name == "createDistributable" && isMacHost) {
         inputs.file(macTouchIdHelper)
@@ -135,6 +162,10 @@ compose.resources {
 }
 
 tasks.test {
+    if (isWindowsHost) {
+        inputs.file(windowsAwtFontConfig)
+        systemProperty("keystead.test.awtFontConfig", windowsAwtFontConfig.get().asFile.absolutePath)
+    }
     doFirst {
         systemProperty("keystead.legacyCoreJar", legacySyncCore.singleFile.absolutePath)
     }
@@ -193,7 +224,7 @@ compose.desktop {
             modules("java.net.http")
             // Installer version mirrors the project release version. Bump per release.
             // macOS DMG requires MAJOR > 0; the project is now 1.x so Dmg is built.
-            packageVersion = "1.1.5"
+            packageVersion = "1.1.6"
             // keystead-core's fail-closed native locked memory requires native access
             // to be granted to the unnamed module. Without this the packaged launcher
             // (Msi/Dmg/Deb) crashes with NativeMemoryUnavailableException on the first
@@ -203,6 +234,10 @@ compose.desktop {
                     "--enable-native-access=ALL-UNNAMED",
                     "--sun-misc-unsafe-memory-access=allow",
                 )
+            if (isWindowsHost) {
+                // jpackage expands APPDIR at launch, so portable copies remain relocatable.
+                jvmArgs += "-Dsun.awt.fontconfig=\$APPDIR/resources/awt-fontconfig.properties"
+            }
             windows {
                 iconFile.set(project.file("src/main/resources/keystead-icon.ico"))
             }

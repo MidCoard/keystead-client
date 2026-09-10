@@ -52,23 +52,30 @@ jobs:
           java-version: '25'
           cache: gradle
       - uses: gradle/actions/setup-gradle@v4
+      - name: Verify Windows native tray text
+        if: runner.os == 'Windows'
+        working-directory: keystead-client
+        run: .\gradlew.bat test --tests top.focess.keystead.client.WindowsTrayTest --no-daemon
       - name: Package native distribution
         working-directory: keystead-client
         run: ${{ matrix.gradle }} packageDistributionForCurrentOS --no-daemon
+      - name: Archive Windows portable application
+        if: runner.os == 'Windows'
+        working-directory: keystead-client
+        shell: pwsh
+        run: Compress-Archive -Path build/compose/binaries/main/app/Keystead -DestinationPath build/compose/binaries/Keystead-windows-portable.zip
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          # Only the native installers belong on the GitHub Release. The build also
-          # produces an unpacked app-image (the JBR runtime, dependency JARs and
-          # native libs) under build/compose/binaries/main/app/ which must not be
-          # uploaded as release assets.
+          # Publish installers and the complete portable ZIP. A standalone EXE from
+          # the unpacked app-image is unusable without its runtime and dependencies.
           path: |
             keystead-client/build/compose/binaries/**/*.msi
             keystead-client/build/compose/binaries/**/*.dmg
             keystead-client/build/compose/binaries/**/*.deb
             keystead-client/build/compose/binaries/**/*.rpm
-            keystead-client/build/compose/binaries/**/*.exe
+            keystead-client/build/compose/binaries/*.zip
           if-no-files-found: error
 
   release:

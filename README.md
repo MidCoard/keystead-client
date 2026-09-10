@@ -99,6 +99,13 @@ Run tests:
 .\gradlew.bat test --no-daemon
 ```
 
+The Windows tray retains the native AWT popup menu. Windows builds extend the JDK's
+font configuration with Chinese in its default font sequence: JDK 25 otherwise
+replaces Chinese menu characters with missing-glyph boxes under UTF-8. Both `run`
+and the portable launcher load this configuration; the portable path is relative
+to the application directory. `WindowsTrayTest` checks native AWT character
+conversion in fresh English and Chinese JVMs with the packaged module set.
+
 Run the opt-in two-client end-to-end test against a real server:
 
 ```powershell
